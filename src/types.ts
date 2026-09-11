@@ -18,6 +18,7 @@ export type ExecutionConfig =
     };
 
 export type RoutingSource = 'signal' | 'classifier' | 'override' | 'fallback';
+export type ClassifierFailure = 'invalid_output' | 'timeout' | 'request_error' | `http_${number}`;
 
 export interface RoutingDecision {
   tier: Tier;
@@ -25,6 +26,7 @@ export interface RoutingDecision {
   execution: ExecutionConfig;
   directive: string | null;
   classifierModel?: string;
+  classifierFailure?: ClassifierFailure;
   latencyMs: number;
   strippedPrompt: string;
 }

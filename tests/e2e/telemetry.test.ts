@@ -18,7 +18,14 @@ vi.mock('os', async (importOriginal) => {
 });
 
 // Static imports — os.homedir is mocked so these use our tmpDir
-import { logDecision, markFollowup, readEvents, hashPrompt, type RoutingEvent } from '../../src/telemetry/logger';
+import {
+  getLocalTimestamp,
+  hashPrompt,
+  logDecision,
+  markFollowup,
+  readEvents,
+  type RoutingEvent,
+} from '../../src/telemetry/logger';
 
 let tmpDir: string;
 
@@ -68,6 +75,22 @@ describe('telemetry e2e', () => {
       had_followup: false,
     });
     expect(parsed).not.toHaveProperty('model');
+  });
+
+  it('writes adaptive local timestamps with an explicit offset', () => {
+    const date = new Date('2026-09-11T21:45:48.652Z');
+    const timestamp = getLocalTimestamp(date);
+
+    expect(timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/);
+    expect(new Date(timestamp).getTime()).toBe(date.getTime());
+  });
+
+  it('records classifier fallback reasons without raw error details', () => {
+    logDecision(makeEvent({ source: 'fallback', classifier_failure: 'http_400' }));
+
+    expect(readEvents()).toEqual([
+      expect.objectContaining({ source: 'fallback', classifier_failure: 'http_400' }),
+    ]);
   });
 
   it('records delegate aliases only as configured targets', () => {

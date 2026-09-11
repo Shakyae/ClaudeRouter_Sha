@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
-import { isTier, type ExecutionConfig, type RoutingSource, type Tier } from '../types';
+import { isTier, type ClassifierFailure, type ExecutionConfig, type RoutingSource, type Tier } from '../types';
 
 export interface RoutingEvent {
   ts: string;
@@ -12,6 +12,7 @@ export interface RoutingEvent {
   tier: Tier;
   execution_mode: ExecutionConfig['mode'];
   configured_model?: string;
+  classifier_failure?: ClassifierFailure;
   source: RoutingSource;
   latency_ms: number;
   had_followup: boolean;
@@ -37,6 +38,13 @@ function normalizeSource(value: unknown): RoutingSource | null {
   return value === 'signal' || value === 'classifier' || value === 'fallback' || value === 'override'
     ? value
     : null;
+}
+
+function isClassifierFailure(value: unknown): value is ClassifierFailure {
+  return value === 'invalid_output'
+    || value === 'timeout'
+    || value === 'request_error'
+    || (typeof value === 'string' && /^http_\d{3}$/.test(value));
 }
 
 function normalizeEvent(value: unknown): RoutingEvent | null {
@@ -73,6 +81,9 @@ function normalizeEvent(value: unknown): RoutingEvent | null {
     executionMode === 'delegate' && typeof value.configured_model === 'string' && value.configured_model.trim()
       ? value.configured_model
       : undefined;
+  const classifierFailure = isClassifierFailure(value.classifier_failure)
+    ? value.classifier_failure
+    : undefined;
 
   return {
     ts: value.ts,
@@ -82,6 +93,7 @@ function normalizeEvent(value: unknown): RoutingEvent | null {
     tier,
     execution_mode: executionMode,
     ...(configuredModel ? { configured_model: configuredModel } : {}),
+    ...(classifierFailure ? { classifier_failure: classifierFailure } : {}),
     source,
     latency_ms: value.latency_ms,
     had_followup: value.had_followup === true,
@@ -97,6 +109,17 @@ function getEventsDir(): string {
 
 function getEventsPath(): string {
   return path.join(getEventsDir(), 'events.jsonl');
+}
+
+export function getLocalTimestamp(date = new Date()): string {
+  const offsetMinutes = -date.getTimezoneOffset();
+  const localDate = new Date(date.getTime() + offsetMinutes * 60_000);
+  const sign = offsetMinutes >= 0 ? '+' : '-';
+  const absoluteOffset = Math.abs(offsetMinutes);
+  const hours = Math.floor(absoluteOffset / 60).toString().padStart(2, '0');
+  const minutes = (absoluteOffset % 60).toString().padStart(2, '0');
+
+  return `${localDate.toISOString().slice(0, -1)}${sign}${hours}:${minutes}`;
 }
 
 function ensureDir(): void {

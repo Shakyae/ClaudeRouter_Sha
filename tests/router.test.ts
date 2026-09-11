@@ -117,11 +117,17 @@ describe('route', () => {
       latencyMs: 1,
       promptTokens: 0,
       classifierModel: 'haiku',
+      classifierFailure: 'http_400',
     });
 
     const decision = await route('ordinary task', DEFAULT_CONFIG);
 
-    expect(decision).toMatchObject({ tier: 'STANDARD', source: 'fallback', execution: { mode: 'direct' } });
+    expect(decision).toMatchObject({
+      tier: 'STANDARD',
+      source: 'fallback',
+      execution: { mode: 'direct' },
+      classifierFailure: 'http_400',
+    });
   });
 });
 

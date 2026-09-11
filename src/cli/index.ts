@@ -2,7 +2,7 @@
 
 import { route } from '../router/router';
 import { loadConfig } from '../router/config';
-import { logDecision, getSessionId, hashPrompt } from '../telemetry/logger';
+import { getLocalTimestamp, logDecision, getSessionId, hashPrompt } from '../telemetry/logger';
 import { recordRoutingEvent } from '../telemetry/feedback';
 import { printStats } from './stats';
 import { handleInit, handleRemove } from './init';
@@ -33,7 +33,7 @@ async function handleRoute(args: string[]): Promise<void> {
   const decision = await route(prompt, config);
 
   // Log telemetry
-  const ts = new Date().toISOString();
+  const ts = getLocalTimestamp();
   logDecision({
     ts,
     session_id: getSessionId(),
@@ -45,6 +45,7 @@ async function handleRoute(args: string[]): Promise<void> {
       ? { configured_model: decision.execution.model }
       : {}),
     source: decision.source,
+    ...(decision.classifierFailure ? { classifier_failure: decision.classifierFailure } : {}),
     latency_ms: decision.latencyMs,
     manual_override: decision.source === 'override',
   });

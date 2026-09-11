@@ -126,13 +126,23 @@ Example `.claude-router.json`:
 | Field | Default | Description |
 |-------|---------|-------------|
 | `tiers.<TIER>` | See [Default execution](#default-execution) | `{ "mode": "direct" }` or `{ "mode": "delegate", "model": "alias" }` |
-| `classifier.model` | `haiku` | Alias sent to the classifier API; `CLAUDE_ROUTER_CLASSIFIER_MODEL` takes precedence |
+| `classifier.model` | `haiku` | Classifier model alias or Provider model ID; see [Classifier model resolution](#classifier-model-resolution) |
 | `classifier.timeout_ms` | `3000` | Classifier request timeout in milliseconds |
 | `fallback_tier` | `STANDARD` | Safe tier used if classification cannot complete |
 | `conservative` | `false` | Shifts the classified tier up one step before its execution is resolved |
 | `overrides` | Five `//<tier>` prefixes | Maps case-insensitive prompt prefixes to tiers; the longest matching prefix wins |
 | `debug.enabled` | `false` | Enables hook debug JSONL output |
 | `debug.prompt_preview_chars` | `150` | Maximum preview length written by debug logging |
+
+### Classifier model resolution
+
+At classifier request time, ClaudeRouter selects the model in this order:
+
+1. A non-empty `CLAUDE_ROUTER_CLASSIFIER_MODEL`.
+2. A non-empty `ANTHROPIC_DEFAULT_HAIKU_MODEL`, but only when `classifier.model` is `haiku` (case-insensitive).
+3. The configured `classifier.model`.
+
+The second step is a compatibility mechanism for the Hook process after it inherits Claude Code's environment. It does not validate that the configured alias or mapped value is the final Provider model. A configured classifier model other than `haiku` is never replaced by `ANTHROPIC_DEFAULT_HAIKU_MODEL`.
 
 An override removes its prefix before routing and bypasses classification:
 
@@ -243,7 +253,7 @@ Inspect the relevant tier in `.claude-router.json`. `direct` is an intentional e
 
 **All uncertain prompts use one tier**
 
-Check `fallback_tier`, `classifier.model`, `CLAUDE_ROUTER_CLASSIFIER_MODEL`, and the classifier API environment. The fallback is normally `STANDARD`.
+If a third-party Gateway rejects `haiku`, first verify Claude Code's `ANTHROPIC_DEFAULT_HAIKU_MODEL` mapping. ClaudeRouter uses that mapping only when `classifier.model` remains `haiku`. Use `CLAUDE_ROUTER_CLASSIFIER_MODEL` only when an explicit Router-specific override is required. Also check `fallback_tier` and the classifier API environment; the fallback is normally `STANDARD`.
 
 **The configured alias did not become the expected Provider model**
 

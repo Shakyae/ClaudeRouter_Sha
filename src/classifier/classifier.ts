@@ -2,7 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import * as fs from 'fs';
 import * as path from 'path';
 import { loadConfig, type RouterConfig } from '../router/config';
-import { TIERS, type Tier } from '../types';
+import { TIERS, type ClassifierFailure, type Tier } from '../types';
 import { quickClassify } from './signals';
 
 export interface ClassificationResult {
@@ -11,6 +11,7 @@ export interface ClassificationResult {
   latencyMs: number;
   promptTokens: number;
   classifierModel?: string;
+  classifierFailure?: ClassifierFailure;
 }
 
 let cachedClient: Anthropic | undefined;
@@ -75,7 +76,27 @@ function countTokens(prompt: string): number {
 }
 
 function getClassifierModel(config: RouterConfig): string {
-  return process.env.CLAUDE_ROUTER_CLASSIFIER_MODEL?.trim() || config.classifier.model;
+  const configuredOverride = process.env.CLAUDE_ROUTER_CLASSIFIER_MODEL?.trim();
+  if (configuredOverride) {
+    return configuredOverride;
+  }
+
+  const configuredModel = config.classifier.model.trim();
+  if (configuredModel.toLowerCase() !== 'haiku') {
+    return configuredModel;
+  }
+
+  return process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL?.trim() || configuredModel;
+}
+
+function getClassifierFailure(error: unknown): ClassifierFailure {
+  if (typeof error === 'object' && error !== null && 'status' in error && typeof error.status === 'number') {
+    return `http_${error.status}`;
+  }
+  if (error instanceof Error && /timeout/i.test(error.name)) {
+    return 'timeout';
+  }
+  return 'request_error';
 }
 
 export async function classify(prompt: string, config = loadConfig()): Promise<ClassificationResult> {
@@ -121,14 +142,16 @@ export async function classify(prompt: string, config = loadConfig()): Promise<C
       latencyMs,
       promptTokens,
       classifierModel,
+      classifierFailure: 'invalid_output',
     };
-  } catch {
+  } catch (error) {
     return {
       tier: config.fallback_tier,
       source: 'fallback',
       latencyMs: Date.now() - start,
       promptTokens: 0,
       classifierModel,
+      classifierFailure: getClassifierFailure(error),
     };
   }
 }

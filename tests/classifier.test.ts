@@ -6,6 +6,9 @@ const { mockCreate } = vi.hoisted(() => ({
   mockCreate: vi.fn(),
 }));
 
+let initialClassifierModel: string | undefined;
+let initialHaikuModel: string | undefined;
+
 vi.mock('@anthropic-ai/sdk', () => ({
   default: class MockAnthropic {
     messages = { create: mockCreate };
@@ -13,6 +16,10 @@ vi.mock('@anthropic-ai/sdk', () => ({
 }));
 
 beforeEach(() => {
+  initialClassifierModel = process.env.CLAUDE_ROUTER_CLASSIFIER_MODEL;
+  initialHaikuModel = process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL;
+  delete process.env.CLAUDE_ROUTER_CLASSIFIER_MODEL;
+  delete process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL;
   mockCreate.mockReset();
   mockCreate.mockResolvedValue({
     content: [{ type: 'text', text: 'STANDARD' }],
@@ -21,7 +28,17 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  delete process.env.CLAUDE_ROUTER_CLASSIFIER_MODEL;
+  if (initialClassifierModel === undefined) {
+    delete process.env.CLAUDE_ROUTER_CLASSIFIER_MODEL;
+  } else {
+    process.env.CLAUDE_ROUTER_CLASSIFIER_MODEL = initialClassifierModel;
+  }
+
+  if (initialHaikuModel === undefined) {
+    delete process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL;
+  } else {
+    process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL = initialHaikuModel;
+  }
 });
 
 describe('classify', () => {
@@ -45,16 +62,26 @@ describe('classify', () => {
 
     const result = await classify('implement a normal feature', config);
 
-    expect(result).toMatchObject({ tier: 'COMPLEX', source: 'fallback', promptTokens: 7 });
+    expect(result).toMatchObject({
+      tier: 'COMPLEX',
+      source: 'fallback',
+      promptTokens: 7,
+      classifierFailure: 'invalid_output',
+    });
   });
 
   it('uses the configured fallback tier after an API error', async () => {
-    mockCreate.mockRejectedValueOnce(new Error('API error'));
+    mockCreate.mockRejectedValueOnce(Object.assign(new Error('API error'), { status: 400 }));
     const config = mergeConfig(DEFAULT_CONFIG, { fallback_tier: 'SIMPLE' });
 
     const result = await classify('implement a normal feature', config);
 
-    expect(result).toMatchObject({ tier: 'SIMPLE', source: 'fallback', promptTokens: 0 });
+    expect(result).toMatchObject({
+      tier: 'SIMPLE',
+      source: 'fallback',
+      promptTokens: 0,
+      classifierFailure: 'http_400',
+    });
   });
 
   it('uses the configured classifier model and timeout', async () => {
@@ -67,8 +94,51 @@ describe('classify', () => {
     expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ model: 'cheap-classifier' }), { timeout: 1234 });
   });
 
-  it('prioritizes CLAUDE_ROUTER_CLASSIFIER_MODEL over config', async () => {
+  it('uses the Claude Code Haiku mapping for the haiku classifier alias', async () => {
+    process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL = '  gateway-haiku  ';
+
+    const result = await classify('implement a normal feature', DEFAULT_CONFIG);
+
+    expect(result.classifierModel).toBe('gateway-haiku');
+    expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ model: 'gateway-haiku' }), expect.anything());
+  });
+
+  it('matches the Haiku classifier alias case-insensitively', async () => {
+    process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL = 'gateway-haiku';
+    const config = mergeConfig(DEFAULT_CONFIG, { classifier: { model: '  HaIkU  ' } });
+
+    const result = await classify('implement a normal feature', config);
+
+    expect(result.classifierModel).toBe('gateway-haiku');
+    expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ model: 'gateway-haiku' }), expect.anything());
+  });
+
+  it.each(['cheap-classifier', 'claude-haiku-4-5'])(
+    'keeps the configured non-haiku classifier model %s',
+    async (model) => {
+      process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL = 'gateway-haiku';
+      const config = mergeConfig(DEFAULT_CONFIG, { classifier: { model } });
+
+      const result = await classify('implement a normal feature', config);
+
+      expect(result.classifierModel).toBe(model);
+      expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ model }), expect.anything());
+    },
+  );
+
+  it('ignores blank classifier model environment values', async () => {
+    process.env.CLAUDE_ROUTER_CLASSIFIER_MODEL = '  ';
+    process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL = '\t ';
+
+    const result = await classify('implement a normal feature', DEFAULT_CONFIG);
+
+    expect(result.classifierModel).toBe('haiku');
+    expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ model: 'haiku' }), expect.anything());
+  });
+
+  it('prioritizes CLAUDE_ROUTER_CLASSIFIER_MODEL over the Claude Code Haiku mapping', async () => {
     process.env.CLAUDE_ROUTER_CLASSIFIER_MODEL = 'environment-classifier';
+    process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL = 'gateway-haiku';
 
     const result = await classify('implement a normal feature', DEFAULT_CONFIG);
 

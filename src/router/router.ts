@@ -70,6 +70,7 @@ export async function route(prompt: string, config: RouterConfig): Promise<Routi
       execution,
       directive: buildDirective(tier, execution),
       classifierModel: classification.classifierModel,
+      classifierFailure: classification.classifierFailure,
       latencyMs: Date.now() - start,
       strippedPrompt: prompt,
     };
@@ -81,6 +82,7 @@ export async function route(prompt: string, config: RouterConfig): Promise<Routi
       source: 'fallback',
       execution,
       directive: buildDirective(tier, execution),
+      classifierFailure: 'request_error',
       latencyMs: Date.now() - start,
       strippedPrompt: prompt,
     };

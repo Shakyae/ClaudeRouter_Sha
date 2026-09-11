@@ -1,7 +1,7 @@
 import { route } from '../router/router';
 import { loadConfig, mergeConfig, type RouterConfigInput } from '../router/config';
 import { TIERS, type RoutingDecision, type Tier } from '../types';
-import { logDecision, getSessionId, hashPrompt } from '../telemetry/logger';
+import { getLocalTimestamp, logDecision, getSessionId, hashPrompt } from '../telemetry/logger';
 import { recordRoutingEvent } from '../telemetry/feedback';
 
 export interface RouterInstance {
@@ -45,7 +45,7 @@ export function createRouter(options?: {
       }
 
       if (telemetryEnabled) {
-        const ts = new Date().toISOString();
+        const ts = getLocalTimestamp();
         logDecision({
           ts,
           session_id: getSessionId(),
@@ -57,6 +57,7 @@ export function createRouter(options?: {
             ? { configured_model: decision.execution.model }
             : {}),
           source: decision.source,
+          ...(decision.classifierFailure ? { classifier_failure: decision.classifierFailure } : {}),
           latency_ms: decision.latencyMs,
           manual_override: decision.source === 'override',
         });

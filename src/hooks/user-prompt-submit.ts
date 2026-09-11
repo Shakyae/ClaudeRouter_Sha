@@ -4,7 +4,7 @@ import * as path from 'path';
 import { route } from '../router/router';
 import { loadConfig, type RouterConfig } from '../router/config';
 import { recordRoutingEvent } from '../telemetry/feedback';
-import { getSessionId, hashPrompt, logDecision } from '../telemetry/logger';
+import { getLocalTimestamp, getSessionId, hashPrompt, logDecision } from '../telemetry/logger';
 import type { RoutingDecision } from '../types';
 
 interface HookInput {
@@ -37,7 +37,7 @@ function logDebug(config: RouterConfig, prompt: string, decision: RoutingDecisio
   try {
     const debugPath = path.join(os.homedir(), '.claude-router', 'debug.jsonl');
     const event = {
-      ts: new Date().toISOString(),
+      ts: getLocalTimestamp(),
       prompt_preview: prompt.slice(0, config.debug.prompt_preview_chars),
       prompt_length: prompt.length,
       tier: decision.tier,
@@ -47,6 +47,7 @@ function logDebug(config: RouterConfig, prompt: string, decision: RoutingDecisio
         ? { configured_model: decision.execution.model }
         : {}),
       ...(decision.classifierModel ? { classifier_model: decision.classifierModel } : {}),
+      ...(decision.classifierFailure ? { classifier_failure: decision.classifierFailure } : {}),
       latency_ms: decision.latencyMs,
     };
 
@@ -59,7 +60,7 @@ function logDebug(config: RouterConfig, prompt: string, decision: RoutingDecisio
 
 function logTelemetry(prompt: string, decision: RoutingDecision): void {
   try {
-    const ts = new Date().toISOString();
+    const ts = getLocalTimestamp();
     logDecision({
       ts,
       session_id: getSessionId(),
@@ -71,6 +72,7 @@ function logTelemetry(prompt: string, decision: RoutingDecision): void {
         ? { configured_model: decision.execution.model }
         : {}),
       source: decision.source,
+      ...(decision.classifierFailure ? { classifier_failure: decision.classifierFailure } : {}),
       latency_ms: decision.latencyMs,
       manual_override: decision.source === 'override',
     });

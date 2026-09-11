@@ -75,6 +75,7 @@ Hardcoded defaults → `~/.claude-router.json` → `./.claude-router.json` (CWD)
 - The `is_subagent` guard in the Node hook prevents infinite classification loops
 - Tier type is `'TRIVIAL' | 'SIMPLE' | 'STANDARD' | 'COMPLEX' | 'EXTREME'`; source type is `'signal' | 'classifier' | 'fallback' | 'override'`
 - `ExecutionConfig` is either `{ mode: 'direct' }` or `{ mode: 'delegate', model: string }`; configured model strings are aliases, not verified Provider models
+- The classifier resolves `haiku` against the Hook's `ANTHROPIC_DEFAULT_HAIKU_MODEL` at request time; do not persist machine-specific Provider model IDs from `init` into project configuration
 - Tests mock the Anthropic SDK — no real API calls in test suite
 
 <!-- claude-router:start -->
