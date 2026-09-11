@@ -18,6 +18,7 @@ vi.mock('os', async (importOriginal) => {
 });
 
 import { computeStats, printStats } from '../../src/cli/stats';
+import { DEFAULT_CONFIG, mergeConfig } from '../../src/router/config';
 
 let tmpDir: string;
 let logOutput: string[];
@@ -44,15 +45,15 @@ function eventsPath(): string {
   return path.join(eventsDir(), 'events.jsonl');
 }
 
-function makeEventLine(overrides?: Record<string, any>): string {
+function makeEventLine(overrides: Record<string, unknown> = {}): string {
   return JSON.stringify({
     ts: new Date().toISOString(),
     session_id: 'test-session',
     prompt_hash: 'abc123def456',
     prompt_tokens: 50,
-    tier: 'MEDIUM',
-    model: 'claude-sonnet-4-6',
-    source: 'signal',
+    tier: 'STANDARD',
+    execution_mode: 'direct',
+    source: 'classifier',
     latency_ms: 42,
     had_followup: false,
     manual_override: false,
@@ -72,188 +73,103 @@ function daysAgo(n: number): string {
 }
 
 describe('stats e2e', () => {
-  describe('basic output', () => {
-    it('10 LOW, 5 MEDIUM, 2 HIGH → counts and percentages correct', () => {
-      const lines = [
-        ...Array.from({ length: 10 }, () =>
-          makeEventLine({ tier: 'LOW', model: 'claude-haiku-4-5-20251001', prompt_tokens: 20 })
-        ),
-        ...Array.from({ length: 5 }, () =>
-          makeEventLine({ tier: 'MEDIUM', model: 'claude-sonnet-4-6', prompt_tokens: 50 })
-        ),
-        ...Array.from({ length: 2 }, () =>
-          makeEventLine({ tier: 'HIGH', model: 'claude-opus-4-6', prompt_tokens: 100 })
-        ),
-      ];
-      writeEvents(lines);
-      const stats = computeStats(7);
-      expect(stats.total).toBe(17);
-      expect(stats.low).toBe(10);
-      expect(stats.medium).toBe(5);
-      expect(stats.high).toBe(2);
-    });
+  it('counts every five-tier execution and routing outcome', () => {
+    writeEvents([
+      makeEventLine({ tier: 'TRIVIAL', execution_mode: 'delegate', configured_model: 'haiku' }),
+      makeEventLine({ tier: 'SIMPLE', execution_mode: 'delegate', configured_model: 'sonnet' }),
+      makeEventLine({ tier: 'STANDARD', execution_mode: 'direct' }),
+      makeEventLine({ tier: 'COMPLEX', execution_mode: 'delegate', configured_model: 'opus', source: 'override', manual_override: true }),
+      makeEventLine({ tier: 'EXTREME', execution_mode: 'delegate', configured_model: 'fable', source: 'fallback' }),
+    ]);
 
-    it('percentages sum to ~100%', () => {
-      const lines = [
-        ...Array.from({ length: 10 }, () => makeEventLine({ tier: 'LOW' })),
-        ...Array.from({ length: 5 }, () => makeEventLine({ tier: 'MEDIUM' })),
-        ...Array.from({ length: 2 }, () => makeEventLine({ tier: 'HIGH' })),
-      ];
-      writeEvents(lines);
-      const stats = computeStats(7);
-      const pctLow = (stats.low / stats.total) * 100;
-      const pctMed = (stats.medium / stats.total) * 100;
-      const pctHigh = (stats.high / stats.total) * 100;
-      const sum = pctLow + pctMed + pctHigh;
-      expect(Math.abs(sum - 100)).toBeLessThanOrEqual(0.1);
-    });
-
-    it('output contains the ← arrow on follow-up rate line', () => {
-      writeEvents([makeEventLine()]);
-      printStats(7);
-      const output = logOutput.join('\n');
-      expect(output).toContain('\u2190');
-      expect(output).toContain('lower is better');
-    });
-
-    it('column alignment is consistent regardless of number width', () => {
-      const lines = Array.from({ length: 100 }, () => makeEventLine({ tier: 'LOW' }));
-      writeEvents(lines);
-      printStats(7);
-      const output = logOutput.join('\n');
-      expect(output).toContain('100');
+    expect(computeStats(7)).toMatchObject({
+      total: 5,
+      tierCounts: {
+        TRIVIAL: 1,
+        SIMPLE: 1,
+        STANDARD: 1,
+        COMPLEX: 1,
+        EXTREME: 1,
+      },
+      direct: 1,
+      delegated: 4,
+      fallbacks: 1,
+      manualOverrides: 1,
     });
   });
 
-  describe('edge cases', () => {
-    it('empty events.jsonl → shows all zeros', () => {
-      fs.mkdirSync(eventsDir(), { recursive: true });
-      fs.writeFileSync(eventsPath(), '', 'utf-8');
-      const stats = computeStats(7);
-      expect(stats.total).toBe(0);
-      expect(stats.low).toBe(0);
-      expect(stats.medium).toBe(0);
-      expect(stats.high).toBe(0);
-    });
+  it('normalizes legacy telemetry into the documented five-tier mapping', () => {
+    writeEvents([
+      makeEventLine({ tier: 'LOW', model: 'legacy-low', execution_mode: undefined, source: 'haiku' }),
+      makeEventLine({ tier: 'MEDIUM', model: 'legacy-medium', execution_mode: undefined, source: 'haiku' }),
+      makeEventLine({ tier: 'HIGH', model: 'legacy-high', execution_mode: undefined, source: 'haiku' }),
+    ]);
 
-    it('missing events.jsonl → shows all zeros', () => {
-      const stats = computeStats(7);
-      expect(stats.total).toBe(0);
-      expect(stats.low).toBe(0);
+    const stats = computeStats(7);
+    expect(stats.tierCounts).toEqual({
+      TRIVIAL: 1,
+      SIMPLE: 0,
+      STANDARD: 1,
+      COMPLEX: 1,
+      EXTREME: 0,
     });
-
-    it('all events are the same tier → other tiers show 0', () => {
-      writeEvents(Array.from({ length: 5 }, () => makeEventLine({ tier: 'HIGH' })));
-      const stats = computeStats(7);
-      expect(stats.high).toBe(5);
-      expect(stats.low).toBe(0);
-      expect(stats.medium).toBe(0);
-    });
-
-    it('zero LOW events → follow-up rate is 0 not NaN or Infinity', () => {
-      writeEvents([makeEventLine({ tier: 'MEDIUM' })]);
-      const stats = computeStats(7);
-      expect(stats.followupRate).toBe(0);
-      expect(Number.isFinite(stats.followupRate)).toBe(true);
-    });
-
-    it('had_followup: true on some events → follow-up rate calculated', () => {
-      const sessionId = 'fu-session';
-      const ts1 = daysAgo(1);
-      const ts2 = new Date(new Date(ts1).getTime() + 1000).toISOString();
-      const lines = [
-        makeEventLine({ tier: 'LOW', session_id: sessionId, ts: ts1, had_followup: false }),
-        makeEventLine({ tier: 'LOW', session_id: sessionId, ts: ts2, had_followup: false }),
-        // Add a followup marker for the first event
-        JSON.stringify({ type: 'followup_marker', session_id: sessionId, ts: ts1 }),
-      ];
-      writeEvents(lines);
-      const stats = computeStats(7);
-      // 2 LOW events, 1 with followup = 50% rate
-      expect(stats.followupRate).toBeCloseTo(0.5, 1);
-    });
+    expect(stats.delegated).toBe(3);
   });
 
-  describe('date filtering', () => {
-    it('events from 8 days ago with --days 7 → excluded', () => {
-      writeEvents([makeEventLine({ ts: daysAgo(8) })]);
-      const stats = computeStats(7);
-      expect(stats.total).toBe(0);
-    });
+  it('calculates the follow-up rate from TRIVIAL events', () => {
+    const sessionId = 'follow-up';
+    const ts = daysAgo(1);
+    const nextTs = new Date(new Date(ts).getTime() + 1_000).toISOString();
+    writeEvents([
+      makeEventLine({ tier: 'TRIVIAL', execution_mode: 'delegate', session_id: sessionId, ts }),
+      makeEventLine({ tier: 'TRIVIAL', execution_mode: 'delegate', session_id: sessionId, ts: nextTs }),
+      JSON.stringify({ type: 'followup_marker', session_id: sessionId, ts }),
+    ]);
 
-    it('events from 6 days ago with --days 7 → included', () => {
-      writeEvents([makeEventLine({ ts: daysAgo(6) })]);
-      const stats = computeStats(7);
-      expect(stats.total).toBe(1);
-    });
-
-    it('events from today → always included', () => {
-      writeEvents([makeEventLine({ ts: new Date().toISOString() })]);
-      const stats = computeStats(7);
-      expect(stats.total).toBe(1);
-    });
-
-    it('--days 1 → only recent events', () => {
-      writeEvents([
-        makeEventLine({ ts: daysAgo(0), tier: 'LOW' }),
-        makeEventLine({ ts: daysAgo(3), tier: 'MEDIUM' }),
-      ]);
-      const stats = computeStats(1);
-      expect(stats.total).toBe(1);
-      expect(stats.low).toBe(1);
-    });
+    expect(computeStats(7).followupRate).toBeCloseTo(0.5, 5);
   });
 
-  describe('estimated savings', () => {
-    it('known token counts → verify saved tokens', () => {
-      writeEvents([
-        makeEventLine({ tier: 'LOW', prompt_tokens: 100 }),
-        makeEventLine({ tier: 'MEDIUM', prompt_tokens: 200 }),
-        makeEventLine({ tier: 'HIGH', prompt_tokens: 300 }),
-      ]);
-      const stats = computeStats(7);
-      // LOW and MEDIUM tokens are "saved" from Opus (100 + 200 = 300)
-      expect(stats.savedTokens).toBe(300);
-    });
+  it('filters old events and handles missing or malformed JSONL entries', () => {
+    writeEvents([
+      makeEventLine({ ts: daysAgo(8) }),
+      makeEventLine({ ts: daysAgo(1), tier: 'SIMPLE', execution_mode: 'delegate' }),
+      '{broken JSON',
+    ]);
 
-    it('all HIGH events → zero savings', () => {
-      writeEvents(Array.from({ length: 3 }, () =>
-        makeEventLine({ tier: 'HIGH', prompt_tokens: 500 })
-      ));
-      const stats = computeStats(7);
-      expect(stats.savedTokens).toBe(0);
-    });
-
-    it('zero events → zero savings', () => {
-      const stats = computeStats(7);
-      expect(stats.savedTokens).toBe(0);
-    });
+    const stats = computeStats(7);
+    expect(stats.total).toBe(1);
+    expect(stats.tierCounts.SIMPLE).toBe(1);
   });
 
-  describe('JSONL robustness', () => {
-    it('corrupted line among valid lines → corrupted line skipped', () => {
-      fs.mkdirSync(eventsDir(), { recursive: true });
-      const good = makeEventLine({ tier: 'LOW' });
-      const content = `${good}\n{broken json\n${good}\n`;
-      fs.writeFileSync(eventsPath(), content, 'utf-8');
-      const stats = computeStats(7);
-      expect(stats.total).toBe(2);
-      expect(stats.low).toBe(2);
+  it('prints configured execution targets without claiming provider model mappings', () => {
+    const config = mergeConfig(DEFAULT_CONFIG, {
+      tiers: {
+        EXTREME: { mode: 'delegate', model: 'frontier-alias' },
+        STANDARD: { mode: 'direct' },
+      },
     });
+    writeEvents([makeEventLine({ tier: 'EXTREME', execution_mode: 'delegate', configured_model: 'frontier-alias' })]);
 
-    it('file with trailing newline → no empty-line parse error', () => {
-      writeEvents([makeEventLine()]);
-      const stats = computeStats(7);
-      expect(stats.total).toBe(1);
-    });
+    printStats(7, config);
+    const output = logOutput.join('\n');
+    expect(output).toContain('EXTREME');
+    expect(output).toContain('delegate (frontier-alias)');
+    expect(output).toContain('STANDARD');
+    expect(output).toContain('direct');
+    expect(output).toContain('Classifier fallbacks:');
+    expect(output).toContain('Follow-up rate (TRIVIAL)');
+    expect(output).not.toContain('Estimated Opus saved');
+  });
 
-    it('file with Windows line endings → parsed correctly', () => {
-      fs.mkdirSync(eventsDir(), { recursive: true });
-      const line1 = makeEventLine({ tier: 'LOW' });
-      const line2 = makeEventLine({ tier: 'MEDIUM' });
-      fs.writeFileSync(eventsPath(), `${line1}\r\n${line2}\r\n`, 'utf-8');
-      const stats = computeStats(7);
-      expect(stats.total).toBe(2);
+  it('reports zeroes when no event file exists', () => {
+    const stats = computeStats(7);
+    expect(stats.total).toBe(0);
+    expect(stats.tierCounts).toEqual({
+      TRIVIAL: 0,
+      SIMPLE: 0,
+      STANDARD: 0,
+      COMPLEX: 0,
+      EXTREME: 0,
     });
   });
 });

@@ -1,5 +1,6 @@
-import { route, type RoutingDecision } from '../router/router';
-import { loadConfig, type RouterConfig } from '../router/config';
+import { route } from '../router/router';
+import { loadConfig, mergeConfig, type RouterConfigInput } from '../router/config';
+import { TIERS, type RoutingDecision, type Tier } from '../types';
 import { logDecision, getSessionId, hashPrompt } from '../telemetry/logger';
 import { recordRoutingEvent } from '../telemetry/feedback';
 
@@ -10,33 +11,20 @@ export interface RouterInstance {
 
 export interface SessionStats {
   total: number;
-  low: number;
-  medium: number;
-  high: number;
+  tiers: Record<Tier, number>;
   overrides: number;
   avg_latency_ms: number;
 }
 
 export function createRouter(options?: {
-  config?: Partial<RouterConfig>;
+  config?: RouterConfigInput;
   telemetry?: boolean;
 }): RouterInstance {
-  const baseConfig = loadConfig();
-  const config: RouterConfig = {
-    ...baseConfig,
-    ...options?.config,
-    tiers: {
-      ...baseConfig.tiers,
-      ...options?.config?.tiers,
-    },
-  };
-
+  const config = mergeConfig(loadConfig(), options?.config ?? {});
   const telemetryEnabled = options?.telemetry ?? true;
   const sessionStats: SessionStats = {
     total: 0,
-    low: 0,
-    medium: 0,
-    high: 0,
+    tiers: Object.fromEntries(TIERS.map((tier) => [tier, 0])) as Record<Tier, number>,
     overrides: 0,
     avg_latency_ms: 0,
   };
@@ -47,38 +35,29 @@ export function createRouter(options?: {
     async route(prompt: string): Promise<RoutingDecision> {
       const decision = await route(prompt, config);
 
-      // Update session stats
       sessionStats.total++;
-      totalLatency += decision.latency_ms;
+      sessionStats.tiers[decision.tier]++;
+      totalLatency += decision.latencyMs;
       sessionStats.avg_latency_ms = Math.round(totalLatency / sessionStats.total);
 
-      switch (decision.tier) {
-        case 'LOW':
-          sessionStats.low++;
-          break;
-        case 'MEDIUM':
-          sessionStats.medium++;
-          break;
-        case 'HIGH':
-          sessionStats.high++;
-          break;
-      }
       if (decision.source === 'override') {
         sessionStats.overrides++;
       }
 
-      // Log telemetry if enabled
       if (telemetryEnabled) {
         const ts = new Date().toISOString();
         logDecision({
           ts,
           session_id: getSessionId(),
           prompt_hash: hashPrompt(prompt),
-          prompt_tokens: prompt.trim().split(/\s+/).filter((t) => t.length > 0).length,
+          prompt_tokens: prompt.trim().split(/\s+/).filter((token) => token.length > 0).length,
           tier: decision.tier,
-          model: decision.model,
+          execution_mode: decision.execution.mode,
+          ...(decision.execution.mode === 'delegate'
+            ? { configured_model: decision.execution.model }
+            : {}),
           source: decision.source,
-          latency_ms: decision.latency_ms,
+          latency_ms: decision.latencyMs,
           manual_override: decision.source === 'override',
         });
         recordRoutingEvent(ts);
@@ -88,7 +67,10 @@ export function createRouter(options?: {
     },
 
     stats(): SessionStats {
-      return { ...sessionStats };
+      return {
+        ...sessionStats,
+        tiers: { ...sessionStats.tiers },
+      };
     },
   };
 }

@@ -1,22 +1,24 @@
 import Anthropic from '@anthropic-ai/sdk';
 import * as fs from 'fs';
 import * as path from 'path';
+import { loadConfig, type RouterConfig } from '../router/config';
+import { TIERS, type Tier } from '../types';
 import { quickClassify } from './signals';
-
-export type Tier = 'LOW' | 'MEDIUM' | 'HIGH';
 
 export interface ClassificationResult {
   tier: Tier;
-  source: 'signal' | 'haiku' | 'fallback';
-  latency_ms: number;
-  prompt_tokens: number;
+  source: 'signal' | 'classifier' | 'fallback';
+  latencyMs: number;
+  promptTokens: number;
+  classifierModel?: string;
 }
 
-const VALID_TIERS: ReadonlySet<string> = new Set(['LOW', 'MEDIUM', 'HIGH']);
-
 let cachedClient: Anthropic | undefined;
+
 function getClient(): Anthropic {
-  if (!cachedClient) cachedClient = new Anthropic();
+  if (!cachedClient) {
+    cachedClient = new Anthropic();
+  }
   return cachedClient;
 }
 
@@ -26,6 +28,7 @@ function loadPromptTemplate(): string {
   if (cachedTemplate !== undefined) {
     return cachedTemplate;
   }
+
   const candidates = [
     path.join(__dirname, '..', 'classifier', 'prompt.md'),
     path.join(__dirname, 'prompt.md'),
@@ -35,25 +38,31 @@ function loadPromptTemplate(): string {
       cachedTemplate = fs.readFileSync(candidate, 'utf-8');
       return cachedTemplate;
     } catch {
-      // try next candidate
+      // Try the next candidate.
     }
   }
-  // Inline fallback template
+
   cachedTemplate = `You are a task complexity classifier for an AI coding assistant.
-Output exactly one word: LOW, MEDIUM, or HIGH. No explanation. No punctuation. Just the word.
+Output exactly one word and nothing else:
+TRIVIAL
+SIMPLE
+STANDARD
+COMPLEX
+EXTREME
+
 Prompt to classify:
 {{PROMPT}}
 Complexity:`;
   return cachedTemplate;
 }
 
-function parseTier(raw: string): Tier | null {
+export function parseTier(raw: string): Tier | null {
   const cleaned = raw.trim().toUpperCase();
-  if (VALID_TIERS.has(cleaned)) {
+  if ((TIERS as readonly string[]).includes(cleaned)) {
     return cleaned as Tier;
   }
-  // Try extracting from a longer response
-  for (const tier of ['HIGH', 'MEDIUM', 'LOW'] as const) {
+
+  for (const tier of [...TIERS].reverse()) {
     if (cleaned.includes(tier)) {
       return tier;
     }
@@ -61,67 +70,65 @@ function parseTier(raw: string): Tier | null {
   return null;
 }
 
-export async function classify(prompt: string): Promise<ClassificationResult> {
-  const start = Date.now();
+function countTokens(prompt: string): number {
+  return prompt.trim().split(/\s+/).filter(Boolean).length;
+}
 
-  // Stage 1: Pre-Haiku heuristics
+function getClassifierModel(config: RouterConfig): string {
+  return process.env.CLAUDE_ROUTER_CLASSIFIER_MODEL?.trim() || config.classifier.model;
+}
+
+export async function classify(prompt: string, config = loadConfig()): Promise<ClassificationResult> {
+  const start = Date.now();
   const signalResult = quickClassify(prompt);
   if (signalResult !== null) {
     return {
       tier: signalResult,
       source: 'signal',
-      latency_ms: Date.now() - start,
-      prompt_tokens: prompt.trim().split(/\s+/).filter((t) => t.length > 0).length,
+      latencyMs: Date.now() - start,
+      promptTokens: countTokens(prompt),
     };
   }
 
-  // Stage 2: Haiku classification
+  const classifierModel = getClassifierModel(config);
   try {
-    const client = getClient();
-    const template = loadPromptTemplate();
-    const classificationPrompt = template.replace('{{PROMPT}}', () => prompt);
+    const response = await getClient().messages.create(
+      {
+        model: classifierModel,
+        max_tokens: 16,
+        messages: [
+          {
+            role: 'user',
+            content: loadPromptTemplate().replace('{{PROMPT}}', () => prompt),
+          },
+        ],
+      },
+      { timeout: config.classifier.timeout_ms },
+    );
 
-    const response = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 10,
-      messages: [
-        {
-          role: 'user',
-          content: classificationPrompt,
-        },
-      ],
-    }, {
-      timeout: 3000,
-    });
+    const latencyMs = Date.now() - start;
+    const textBlock = response.content.find((block: Anthropic.ContentBlock) => block.type === 'text');
+    const tier = parseTier(textBlock?.text ?? '');
+    const promptTokens = response.usage?.input_tokens ?? 0;
 
-    const latency = Date.now() - start;
-    const textBlock = response.content.find((b: Anthropic.ContentBlock) => b.type === 'text');
-    const rawText = textBlock ? textBlock.text : '';
-    const tier = parseTier(rawText);
-
-    if (tier !== null) {
-      return {
-        tier,
-        source: 'haiku',
-        latency_ms: latency,
-        prompt_tokens: response.usage?.input_tokens ?? 0,
-      };
+    if (tier) {
+      return { tier, source: 'classifier', latencyMs, promptTokens, classifierModel };
     }
 
-    // Parse failure: fallback to MEDIUM
     return {
-      tier: 'MEDIUM',
+      tier: config.fallback_tier,
       source: 'fallback',
-      latency_ms: latency,
-      prompt_tokens: response.usage?.input_tokens ?? 0,
+      latencyMs,
+      promptTokens,
+      classifierModel,
     };
   } catch {
-    // API error: fallback to MEDIUM, never throw
     return {
-      tier: 'MEDIUM',
+      tier: config.fallback_tier,
       source: 'fallback',
-      latency_ms: Date.now() - start,
-      prompt_tokens: 0,
+      latencyMs: Date.now() - start,
+      promptTokens: 0,
+      classifierModel,
     };
   }
 }

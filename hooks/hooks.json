@@ -1,12 +1,12 @@
 {
-  "description": "ClaudeRouter - classify prompt complexity and route to Haiku, Sonnet, or Opus",
+  "description": "ClaudeRouter - configuration-driven prompt routing",
   "hooks": {
     "UserPromptSubmit": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/user-prompt-submit.sh",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/hooks/user-prompt-submit.js\"",
             "timeout": 30
           }
         ]

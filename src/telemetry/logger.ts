@@ -2,18 +2,91 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
+import { isTier, type ExecutionConfig, type RoutingSource, type Tier } from '../types';
 
 export interface RoutingEvent {
   ts: string;
   session_id: string;
   prompt_hash: string;
   prompt_tokens: number;
-  tier: 'LOW' | 'MEDIUM' | 'HIGH';
-  model: string;
-  source: 'signal' | 'haiku' | 'fallback' | 'override';
+  tier: Tier;
+  execution_mode: ExecutionConfig['mode'];
+  configured_model?: string;
+  source: RoutingSource;
   latency_ms: number;
   had_followup: boolean;
   manual_override: boolean;
+}
+
+
+const LEGACY_TIER_MAP: Record<string, Tier> = {
+  LOW: 'TRIVIAL',
+  MEDIUM: 'STANDARD',
+  HIGH: 'COMPLEX',
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function normalizeSource(value: unknown): RoutingSource | null {
+  if (value === 'haiku') {
+    return 'classifier';
+  }
+
+  return value === 'signal' || value === 'classifier' || value === 'fallback' || value === 'override'
+    ? value
+    : null;
+}
+
+function normalizeEvent(value: unknown): RoutingEvent | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const rawTier = value.tier;
+  const tier = isTier(rawTier)
+    ? rawTier
+    : typeof rawTier === 'string'
+      ? LEGACY_TIER_MAP[rawTier]
+      : undefined;
+  const source = normalizeSource(value.source);
+  const executionMode = value.execution_mode === 'direct' || value.execution_mode === 'delegate'
+    ? value.execution_mode
+    : typeof rawTier === 'string' && LEGACY_TIER_MAP[rawTier]
+      ? 'delegate'
+      : null;
+
+  if (
+    !tier ||
+    !source ||
+    !executionMode ||
+    typeof value.ts !== 'string' ||
+    typeof value.session_id !== 'string' ||
+    typeof value.prompt_hash !== 'string' ||
+    typeof value.latency_ms !== 'number'
+  ) {
+    return null;
+  }
+
+  const configuredModel =
+    executionMode === 'delegate' && typeof value.configured_model === 'string' && value.configured_model.trim()
+      ? value.configured_model
+      : undefined;
+
+  return {
+    ts: value.ts,
+    session_id: value.session_id,
+    prompt_hash: value.prompt_hash,
+    prompt_tokens: typeof value.prompt_tokens === 'number' ? value.prompt_tokens : 0,
+    tier,
+    execution_mode: executionMode,
+    ...(configuredModel ? { configured_model: configuredModel } : {}),
+    source,
+    latency_ms: value.latency_ms,
+    had_followup: value.had_followup === true,
+    manual_override: value.manual_override === true || source === 'override',
+  };
 }
 
 const SESSION_ID = crypto.randomUUID();
@@ -76,18 +149,23 @@ export function readEvents(): RoutingEvent[] {
     for (const line of content.split('\n')) {
       if (!line.trim()) continue;
       try {
-        const parsed = JSON.parse(line);
-        if (parsed.type === 'followup_marker') {
-          followups.add(`${parsed.session_id}:${parsed.ts}`);
-        } else if (parsed.ts && typeof parsed.ts === 'string') {
-          events.push(parsed as RoutingEvent);
+        const parsed: unknown = JSON.parse(line);
+        if (isRecord(parsed) && parsed.type === 'followup_marker') {
+          if (typeof parsed.session_id === 'string' && typeof parsed.ts === 'string') {
+            followups.add(`${parsed.session_id}:${parsed.ts}`);
+          }
+          continue;
+        }
+
+        const event = normalizeEvent(parsed);
+        if (event) {
+          events.push(event);
         }
       } catch {
-        // skip malformed lines
+        // Skip malformed JSONL entries.
       }
     }
 
-    // Reconcile followup markers with events
     for (const event of events) {
       if (followups.has(`${event.session_id}:${event.ts}`)) {
         event.had_followup = true;

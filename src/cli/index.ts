@@ -40,17 +40,20 @@ async function handleRoute(args: string[]): Promise<void> {
     prompt_hash: hashPrompt(prompt),
     prompt_tokens: prompt.trim().split(/\s+/).filter((t) => t.length > 0).length,
     tier: decision.tier,
-    model: decision.model,
+    execution_mode: decision.execution.mode,
+    ...(decision.execution.mode === 'delegate'
+      ? { configured_model: decision.execution.model }
+      : {}),
     source: decision.source,
-    latency_ms: decision.latency_ms,
+    latency_ms: decision.latencyMs,
     manual_override: decision.source === 'override',
   });
   recordRoutingEvent(ts);
 
   if (format === 'model') {
-    process.stdout.write(decision.model);
+    process.stdout.write(decision.execution.mode === 'delegate' ? decision.execution.model : '');
   } else if (format === 'directive') {
-    process.stdout.write(decision.directive);
+    process.stdout.write(decision.directive ?? '');
   } else {
     process.stdout.write(JSON.stringify(decision, null, 2) + '\n');
   }
@@ -105,7 +108,7 @@ Commands:
   stats    Show routing statistics for the last N days (default: 7)
   init     Register the UserPromptSubmit hook and inject CLAUDE.md directives
   remove   Remove the hook and CLAUDE.md directives
-  doctor   Check Node version, jq, hook registration, and file accessibility`);
+  doctor   Check Node version, compiled hook, registration, and file accessibility`);
       break;
     default:
       process.stderr.write(`Unknown command: ${command}\n`);

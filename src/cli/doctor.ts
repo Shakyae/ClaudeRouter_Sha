@@ -1,7 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { execSync } from 'child_process';
 
 interface Check {
   label: string;
@@ -18,32 +17,53 @@ function checkNodeVersion(): Check {
   };
 }
 
-function checkJq(): Check {
-  try {
-    execSync('command -v jq', { stdio: 'pipe' });
-    return { label: 'jq installed', pass: true };
-  } catch {
-    return { label: 'jq installed', pass: false, detail: 'not found in PATH' };
-  }
+function getHookPath(): string {
+  return path.resolve(__dirname, '..', '..', 'dist', 'hooks', 'user-prompt-submit.js');
+}
+
+function getHookCommand(): string {
+  return `node \"${getHookPath()}\"`;
+}
+
+function checkHookScript(): Check {
+  const hookPath = getHookPath();
+  const exists = fs.existsSync(hookPath);
+  return {
+    label: 'Compiled Node hook accessible',
+    pass: exists,
+    detail: exists ? undefined : `not found at ${hookPath}; run npm run build`,
+  };
 }
 
 function checkHookRegistered(): Check {
   const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
   try {
-    const content = fs.readFileSync(settingsPath, 'utf-8');
-    const settings = JSON.parse(content);
-    const hooks = settings?.hooks?.UserPromptSubmit;
-    if (Array.isArray(hooks)) {
-      const found = hooks.some(
-        (entry: any) => typeof entry === 'object' && entry.command && entry.command.includes('claude-router')
-      );
-      if (found) {
-        return { label: 'Hook registered in ~/.claude/settings.json', pass: true };
+    const settings: unknown = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+    const hooks = typeof settings === 'object' && settings !== null
+      ? (settings as { hooks?: { UserPromptSubmit?: unknown } }).hooks?.UserPromptSubmit
+      : undefined;
+    const hasRouterCommand = (value: unknown): boolean => {
+      const command = typeof value === 'object' && value !== null
+        ? (value as { command?: unknown }).command
+        : undefined;
+      return typeof command === 'string' && (command === getHookCommand() || command.includes(getHookPath()));
+    };
+    const found = Array.isArray(hooks) && hooks.some((entry) => {
+      if (hasRouterCommand(entry)) {
+        return true;
       }
-    }
-    return { label: 'Hook registered in ~/.claude/settings.json', pass: false, detail: 'not found' };
+
+      const nestedHooks = typeof entry === 'object' && entry !== null
+        ? (entry as { hooks?: unknown }).hooks
+        : undefined;
+      return Array.isArray(nestedHooks) && nestedHooks.some(hasRouterCommand);
+    });
+
+    return found
+      ? { label: 'Node hook registered in ~/.claude/settings.json', pass: true }
+      : { label: 'Node hook registered in ~/.claude/settings.json', pass: false, detail: 'not found' };
   } catch {
-    return { label: 'Hook registered in ~/.claude/settings.json', pass: false, detail: 'settings.json not readable' };
+    return { label: 'Node hook registered in ~/.claude/settings.json', pass: false, detail: 'settings.json not readable' };
   }
 }
 
@@ -90,7 +110,7 @@ export function handleDoctor(): void {
 
   const checks: Check[] = [
     checkNodeVersion(),
-    checkJq(),
+    checkHookScript(),
     checkHookRegistered(),
     checkClaudeMdMarker(),
     checkRuntimeClaudeMd(),
@@ -110,6 +130,6 @@ export function handleDoctor(): void {
     console.log('All checks passed.');
   } else {
     console.log('Some checks failed. Run `claude-router init` to fix setup issues.');
-    process.exit(1);
+    process.exitCode = 1;
   }
 }

@@ -1,106 +1,138 @@
-import { describe, it, expect, vi } from 'vitest';
-import { route } from '../src/router/router';
-import type { RouterConfig } from '../src/router/config';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { DEFAULT_CONFIG, mergeConfig } from '../src/router/config';
+import { buildDirective, route } from '../src/router/router';
+import type { Tier } from '../src/types';
 
-// Mock the Anthropic SDK
-vi.mock('@anthropic-ai/sdk', () => {
-  return {
-    default: class MockAnthropic {
-      messages = {
-        create: vi.fn().mockResolvedValue({
-          content: [{ type: 'text', text: 'MEDIUM' }],
-          usage: { input_tokens: 50 },
-        }),
-      };
-    },
-  };
+const { mockClassify } = vi.hoisted(() => ({
+  mockClassify: vi.fn(),
+}));
+
+vi.mock('../src/classifier/classifier', () => ({
+  classify: mockClassify,
+}));
+
+beforeEach(() => {
+  mockClassify.mockReset();
+  mockClassify.mockResolvedValue({
+    tier: 'STANDARD',
+    source: 'classifier',
+    latencyMs: 1,
+    promptTokens: 10,
+    classifierModel: 'haiku',
+  });
 });
 
-const defaultConfig: RouterConfig = {
-  tiers: {
-    LOW: 'claude-haiku-4-5-20251001',
-    MEDIUM: 'claude-sonnet-4-6',
-    HIGH: 'claude-opus-4-6',
-  },
-  fallback: 'claude-sonnet-4-6',
-  conservative: false,
-  override_keyword: '//opus',
-};
+function classifyAs(tier: Tier): void {
+  mockClassify.mockResolvedValueOnce({
+    tier,
+    source: 'classifier',
+    latencyMs: 1,
+    promptTokens: 10,
+    classifierModel: 'test-classifier',
+  });
+}
 
 describe('route', () => {
-  it('"//opus explain this architecture" → Opus, source: override', async () => {
-    const decision = await route('//opus explain this architecture', defaultConfig);
-    expect(decision.model).toBe('claude-opus-4-6');
-    expect(decision.source).toBe('override');
-    expect(decision.stripped_prompt).toBe('explain this architecture');
+  it.each([
+    ['TRIVIAL', { mode: 'delegate', model: 'haiku' }],
+    ['SIMPLE', { mode: 'delegate', model: 'sonnet' }],
+    ['STANDARD', { mode: 'direct' }],
+    ['COMPLEX', { mode: 'delegate', model: 'opus' }],
+    ['EXTREME', { mode: 'delegate', model: 'fable' }],
+  ] as const)('resolves %s through its configured execution', async (tier, execution) => {
+    classifyAs(tier);
+
+    const decision = await route('ordinary task', DEFAULT_CONFIG);
+
+    expect(decision.tier).toBe(tier);
+    expect(decision.execution).toEqual(execution);
+    if (execution.mode === 'delegate') {
+      expect(decision.directive).toContain(`model "${execution.model}"`);
+    } else {
+      expect(decision.directive).toBeNull();
+    }
   });
 
-  it('override keyword is case-insensitive', async () => {
-    const decision = await route('//OPUS explain this', defaultConfig);
-    expect(decision.model).toBe('claude-opus-4-6');
-    expect(decision.source).toBe('override');
+  it.each(['TRIVIAL', 'SIMPLE', 'STANDARD', 'COMPLEX', 'EXTREME'] as const)(
+    'allows %s to be configured for direct execution',
+    async (tier) => {
+      classifyAs(tier);
+      const config = mergeConfig(DEFAULT_CONFIG, { tiers: { [tier]: { mode: 'direct' } } });
+
+      const decision = await route('ordinary task', config);
+
+      expect(decision.execution).toEqual({ mode: 'direct' });
+      expect(decision.directive).toBeNull();
+    },
+  );
+
+  it('changes the delegate target from configuration alone', async () => {
+    classifyAs('EXTREME');
+    const config = mergeConfig(DEFAULT_CONFIG, {
+      tiers: { EXTREME: { mode: 'delegate', model: 'frontier-v2' } },
+    });
+
+    const decision = await route('ordinary task', config);
+
+    expect(decision.execution).toEqual({ mode: 'delegate', model: 'frontier-v2' });
+    expect(decision.directive).toContain('model "frontier-v2"');
   });
 
-  it('conservative mode shifts LOW → MEDIUM model', async () => {
-    const conservativeConfig: RouterConfig = {
-      ...defaultConfig,
-      conservative: true,
-    };
-    // "hello" is classified as LOW by signals (1 token, no context ref)
-    const decision = await route('hello', conservativeConfig);
-    expect(decision.tier).toBe('LOW');
-    // But the model should be MEDIUM (Sonnet) due to conservative shift
-    expect(decision.model).toBe('claude-sonnet-4-6');
+  it('uses the configured override tier without invoking the classifier', async () => {
+    const config = mergeConfig(DEFAULT_CONFIG, {
+      overrides: { '//force': 'COMPLEX' },
+    });
+
+    const decision = await route('//FoRcE inspect the race condition', config);
+
+    expect(decision).toMatchObject({
+      tier: 'COMPLEX',
+      source: 'override',
+      execution: { mode: 'delegate', model: 'opus' },
+      strippedPrompt: 'inspect the race condition',
+    });
+    expect(mockClassify).not.toHaveBeenCalled();
   });
 
-  it('conservative mode shifts MEDIUM → HIGH model', async () => {
-    const conservativeConfig: RouterConfig = {
-      ...defaultConfig,
-      conservative: true,
-    };
-    // Use a prompt that falls through to Haiku (mocked to return MEDIUM)
-    const decision = await route(
-      'implement the user authentication flow with JWT tokens',
-      conservativeConfig
+  it.each([
+    ['TRIVIAL', 'SIMPLE'],
+    ['SIMPLE', 'STANDARD'],
+    ['STANDARD', 'COMPLEX'],
+    ['COMPLEX', 'EXTREME'],
+    ['EXTREME', 'EXTREME'],
+  ] as const)('conservative mode shifts %s to %s before resolving execution', async (inputTier, outputTier) => {
+    classifyAs(inputTier);
+    const config = mergeConfig(DEFAULT_CONFIG, { conservative: true });
+
+    const decision = await route('ordinary task', config);
+
+    expect(decision.tier).toBe(outputTier);
+    expect(decision.execution).toEqual(config.tiers[outputTier]);
+  });
+
+  it('retains a classifier fallback decision and resolves its configured execution', async () => {
+    mockClassify.mockResolvedValueOnce({
+      tier: 'STANDARD',
+      source: 'fallback',
+      latencyMs: 1,
+      promptTokens: 0,
+      classifierModel: 'haiku',
+    });
+
+    const decision = await route('ordinary task', DEFAULT_CONFIG);
+
+    expect(decision).toMatchObject({ tier: 'STANDARD', source: 'fallback', execution: { mode: 'direct' } });
+  });
+});
+
+describe('buildDirective', () => {
+  it('emits no directive for direct execution', () => {
+    expect(buildDirective('STANDARD', { mode: 'direct' })).toBeNull();
+  });
+
+  it('only uses the configured delegate model', () => {
+    expect(buildDirective('COMPLEX', { mode: 'delegate', model: 'arbitrary-alias' })).toContain(
+      'model "arbitrary-alias"',
     );
-    expect(decision.tier).toBe('MEDIUM');
-    expect(decision.model).toBe('claude-opus-4-6');
-  });
-
-  it('config CWD override takes precedence over global', async () => {
-    const customConfig: RouterConfig = {
-      ...defaultConfig,
-      tiers: {
-        ...defaultConfig.tiers,
-        LOW: 'custom-haiku-model',
-      },
-    };
-    // "hello" is classified as LOW by signals (1 token, no context ref)
-    const decision = await route('hello', customConfig);
-    expect(decision.model).toBe('custom-haiku-model');
-  });
-
-  it('LOW prompt gets correct directive', async () => {
-    // "hello" is classified as LOW by signals (1 token, no context ref)
-    const decision = await route('hello', defaultConfig);
-    expect(decision.directive).toContain('[ROUTER]');
-    expect(decision.directive).toContain('LOW');
-    expect(decision.directive).toContain('Haiku subagent');
-  });
-
-  it('HIGH prompt gets direct handling directive', async () => {
-    const decision = await route(
-      'refactor the entire auth system from scratch',
-      defaultConfig
-    );
-    expect(decision.directive).toContain('[ROUTER]');
-    expect(decision.directive).toContain('HIGH');
-    expect(decision.directive).toContain('Handle this task directly');
-  });
-
-  it('override gets special directive', async () => {
-    const decision = await route('//opus do something', defaultConfig);
-    expect(decision.directive).toContain('[ROUTER]');
-    expect(decision.directive).toContain('User explicitly requested Opus');
   });
 });

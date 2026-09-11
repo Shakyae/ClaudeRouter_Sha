@@ -1,97 +1,41 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { quickClassify } from '../src/classifier/signals';
 
 describe('quickClassify', () => {
-  it('"yes" → HIGH', () => {
-    expect(quickClassify('yes')).toBe('HIGH');
+  it.each([
+    ['find calculatePrice', 'TRIVIAL'],
+    ['where is the router defined', 'TRIVIAL'],
+    ['list files in src', 'TRIVIAL'],
+    ['fix typo', 'TRIVIAL'],
+    ['rename the variable', 'TRIVIAL'],
+    ['format this file', 'TRIVIAL'],
+  ] as const)('classifies %s as %s', (prompt, tier) => {
+    expect(quickClassify(prompt)).toBe(tier);
   });
 
-  it('"ok" → HIGH', () => {
-    expect(quickClassify('ok')).toBe('HIGH');
+  it.each(['yes', 'ok', 'do it', 'continue', '按这个方案继续', '照刚才的做'])(
+    'keeps follow-up %s at STANDARD',
+    (prompt) => {
+      expect(quickClassify(prompt)).toBe('STANDARD');
+    },
+  );
+
+  it('does not infer difficulty from prompt length', () => {
+    expect(quickClassify(Array(1000).fill('format the generated output').join(' '))).toBeNull();
   });
 
-  it('"lgtm" → HIGH', () => {
-    expect(quickClassify('lgtm')).toBe('HIGH');
+  it('defers broad implementation verbs to the classifier', () => {
+    expect(quickClassify('implement a new authentication system')).toBeNull();
+    expect(quickClassify('debug the failing integration')).toBeNull();
+    expect(quickClassify('refactor this module')).toBeNull();
   });
 
-  it('"go ahead" → HIGH', () => {
-    expect(quickClassify('go ahead')).toBe('HIGH');
+  it('identifies high-confidence concurrency and architecture tasks', () => {
+    expect(quickClassify('investigate a cross-module race condition')).toBe('COMPLEX');
+    expect(quickClassify('redesign the entire architecture')).toBe('EXTREME');
   });
 
-  it('"sounds good." → HIGH (with period)', () => {
-    expect(quickClassify('sounds good.')).toBe('HIGH');
-  });
-
-  it('prompt with 3 words containing context reference → null (deferred to Haiku)', () => {
-    expect(quickClassify('fix the bug')).toBeNull();
-  });
-
-  it('"what does this function do" → null (context reference: "this", "the function")', () => {
-    expect(quickClassify('what does this function do')).toBeNull();
-  });
-
-  it('"show me the error logs" → null (context reference: "the error")', () => {
-    expect(quickClassify('show me the error logs')).toBeNull();
-  });
-
-  it('"list all files in src" → LOW (starts with "list")', () => {
-    expect(quickClassify('list all files in src')).toBe('LOW');
-  });
-
-  it('"done" → LOW (completion prefix)', () => {
-    expect(quickClassify('done')).toBe('LOW');
-  });
-
-  it('"✓ completed the task" → LOW (starts with ✓)', () => {
-    expect(quickClassify('✓ completed the task')).toBe('LOW');
-  });
-
-  it('"refactor the entire auth system from scratch" → HIGH', () => {
-    expect(quickClassify('refactor the entire auth system from scratch')).toBe('HIGH');
-  });
-
-  it('"do a security review of the payment module" → HIGH (contains "security review")', () => {
-    expect(quickClassify('do a security review of the payment module')).toBe('HIGH');
-  });
-
-  it('"architect the new microservices layer" → HIGH (contains "architect")', () => {
-    expect(quickClassify('architect the new microservices layer')).toBe('HIGH');
-  });
-
-  it('prompt with 500 words → HIGH', () => {
-    const longPrompt = Array(500).fill('word').join(' ');
-    expect(quickClassify(longPrompt)).toBe('HIGH');
-  });
-
-  it('"add an endpoint for user login" → null (falls through to Haiku)', () => {
-    expect(quickClassify('add an endpoint for user login')).toBeNull();
-  });
-
-  it('"implement the user authentication flow with JWT tokens" → null', () => {
-    expect(quickClassify('implement the user authentication flow with JWT tokens')).toBeNull();
-  });
-
-  it('"write tests for the payment module covering edge cases" → null', () => {
-    expect(quickClassify('write tests for the payment module covering edge cases')).toBeNull();
-  });
-
-  it('empty string → LOW', () => {
-    expect(quickClassify('')).toBe('LOW');
-  });
-
-  it('"sure" → HIGH (context-dependent confirmation)', () => {
-    expect(quickClassify('sure')).toBe('HIGH');
-  });
-
-  it('"do it" → HIGH (context-dependent confirmation)', () => {
-    expect(quickClassify('do it')).toBe('HIGH');
-  });
-
-  it('Japanese prompt → null (deferred to Haiku for non-Latin scripts)', () => {
-    expect(quickClassify('このコードのバグを修正してください')).toBeNull();
-  });
-
-  it('short numeric response "201" → LOW (under token threshold, no context ref)', () => {
-    expect(quickClassify('201')).toBe('LOW');
+  it('uses STANDARD for an empty prompt instead of treating it as trivial', () => {
+    expect(quickClassify('')).toBe('STANDARD');
   });
 });

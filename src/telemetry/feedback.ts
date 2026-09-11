@@ -45,8 +45,8 @@ export function recordRoutingEvent(ts: string): void {
 }
 
 export interface FeedbackStats {
-  total_low: number;
-  low_with_followup: number;
+  total_trivial: number;
+  trivial_with_followup: number;
   followup_rate: number;
 }
 
@@ -56,22 +56,21 @@ export function computeFollowupStats(daysBack: number = 7): FeedbackStats {
   cutoff.setDate(cutoff.getDate() - daysBack);
   const cutoffIso = cutoff.toISOString();
 
-  let totalLow = 0;
-  let lowWithFollowup = 0;
+  let totalTrivial = 0;
+  let trivialWithFollowup = 0;
 
   for (const event of events) {
-    if (event.ts < cutoffIso) continue;
-    if (event.tier === 'LOW') {
-      totalLow++;
-      if (event.had_followup) {
-        lowWithFollowup++;
-      }
+    if (event.ts < cutoffIso || event.tier !== 'TRIVIAL') continue;
+
+    totalTrivial++;
+    if (event.had_followup) {
+      trivialWithFollowup++;
     }
   }
 
   return {
-    total_low: totalLow,
-    low_with_followup: lowWithFollowup,
-    followup_rate: totalLow > 0 ? lowWithFollowup / totalLow : 0,
+    total_trivial: totalTrivial,
+    trivial_with_followup: trivialWithFollowup,
+    followup_rate: totalTrivial > 0 ? trivialWithFollowup / totalTrivial : 0,
   };
 }

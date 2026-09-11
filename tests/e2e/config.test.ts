@@ -1,13 +1,15 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'fs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import * as path from 'path';
+import path from 'path';
 
 const { getHomedir, setHomedir } = vi.hoisted(() => {
   let homedir = '';
   return {
     getHomedir: () => homedir,
-    setHomedir: (v: string) => { homedir = v; },
+    setHomedir: (value: string) => {
+      homedir = value;
+    },
   };
 });
 
@@ -18,181 +20,136 @@ vi.mock('os', async (importOriginal) => {
 
 import { loadConfig } from '../../src/router/config';
 
-let tmpDir: string;
+let tempDir: string;
 let homeDir: string;
 let projectDir: string;
 
 beforeEach(() => {
-  tmpDir = mkdtempSync(path.join(tmpdir(), 'claude-router-config-'));
-  homeDir = path.join(tmpDir, 'home');
-  projectDir = path.join(tmpDir, 'project');
+  tempDir = mkdtempSync(path.join(tmpdir(), 'claude-router-config-'));
+  homeDir = path.join(tempDir, 'home');
+  projectDir = path.join(tempDir, 'project');
   mkdirSync(homeDir, { recursive: true });
   mkdirSync(projectDir, { recursive: true });
   setHomedir(homeDir);
 });
 
 afterEach(() => {
-  rmSync(tmpDir, { recursive: true, force: true });
+  rmSync(tempDir, { recursive: true, force: true });
 });
 
-function writeGlobalConfig(config: object): void {
-  writeFileSync(path.join(homeDir, '.claude-router.json'), JSON.stringify(config), 'utf-8');
+function writeConfig(directory: string, config: object): void {
+  writeFileSync(path.join(directory, '.claude-router.json'), JSON.stringify(config), 'utf-8');
 }
 
-function writeProjectConfig(config: object): void {
-  writeFileSync(path.join(projectDir, '.claude-router.json'), JSON.stringify(config), 'utf-8');
-}
+describe('config loading', () => {
+  it('loads five independent default tier executions', () => {
+    const config = loadConfig(projectDir);
 
-describe('config loading e2e', () => {
-  describe('defaults', () => {
-    it('LOW tier defaults to haiku model', () => {
-      const config = loadConfig(projectDir);
-      expect(config.tiers.LOW).toBe('claude-haiku-4-5-20251001');
-    });
-
-    it('MEDIUM tier defaults to sonnet model', () => {
-      const config = loadConfig(projectDir);
-      expect(config.tiers.MEDIUM).toBe('claude-sonnet-4-6');
-    });
-
-    it('HIGH tier defaults to opus model', () => {
-      const config = loadConfig(projectDir);
-      expect(config.tiers.HIGH).toBe('claude-opus-4-6');
-    });
-
-    it('fallback defaults to sonnet', () => {
-      const config = loadConfig(projectDir);
-      expect(config.fallback).toBe('claude-sonnet-4-6');
-    });
-
-    it('conservative defaults to false', () => {
-      const config = loadConfig(projectDir);
-      expect(config.conservative).toBe(false);
-    });
-
-    it('override_keyword defaults to //opus', () => {
-      const config = loadConfig(projectDir);
-      expect(config.override_keyword).toBe('//opus');
-    });
+    expect(config.tiers.TRIVIAL).toEqual({ mode: 'delegate', model: 'haiku' });
+    expect(config.tiers.SIMPLE).toEqual({ mode: 'delegate', model: 'sonnet' });
+    expect(config.tiers.STANDARD).toEqual({ mode: 'direct' });
+    expect(config.tiers.COMPLEX).toEqual({ mode: 'delegate', model: 'opus' });
+    expect(config.tiers.EXTREME).toEqual({ mode: 'delegate', model: 'fable' });
+    expect(config.fallback_tier).toBe('STANDARD');
+    expect(config.classifier).toEqual({ model: 'haiku', timeout_ms: 3000 });
   });
 
-  describe('global config only', () => {
-    it('sets LOW model → LOW uses custom, MEDIUM and HIGH use defaults', () => {
-      writeGlobalConfig({ tiers: { LOW: 'claude-haiku-custom' } });
-      const config = loadConfig(projectDir);
-      expect(config.tiers.LOW).toBe('claude-haiku-custom');
-      expect(config.tiers.MEDIUM).toBe('claude-sonnet-4-6');
-      expect(config.tiers.HIGH).toBe('claude-opus-4-6');
+  it('deep-merges a partial tier override without changing other tiers', () => {
+    writeConfig(projectDir, {
+      tiers: {
+        EXTREME: { mode: 'delegate', model: 'frontier-v2' },
+      },
     });
 
-    it('sets conservative: true → reflects in loaded config', () => {
-      writeGlobalConfig({ conservative: true });
-      const config = loadConfig(projectDir);
-      expect(config.conservative).toBe(true);
-    });
+    const config = loadConfig(projectDir);
 
-    it('sets override_keyword to "//sonnet" → reflects in loaded config', () => {
-      writeGlobalConfig({ override_keyword: '//sonnet' });
-      const config = loadConfig(projectDir);
-      expect(config.override_keyword).toBe('//sonnet');
-    });
+    expect(config.tiers.EXTREME).toEqual({ mode: 'delegate', model: 'frontier-v2' });
+    expect(config.tiers.TRIVIAL).toEqual({ mode: 'delegate', model: 'haiku' });
+    expect(config.tiers.STANDARD).toEqual({ mode: 'direct' });
   });
 
-  describe('project config only', () => {
-    it('sets MEDIUM model → MEDIUM uses custom, others use defaults', () => {
-      writeProjectConfig({ tiers: { MEDIUM: 'claude-sonnet-custom' } });
-      const config = loadConfig(projectDir);
-      expect(config.tiers.MEDIUM).toBe('claude-sonnet-custom');
-      expect(config.tiers.LOW).toBe('claude-haiku-4-5-20251001');
-      expect(config.tiers.HIGH).toBe('claude-opus-4-6');
+  it('applies project configuration after global configuration', () => {
+    writeConfig(homeDir, {
+      tiers: {
+        SIMPLE: { mode: 'delegate', model: 'global-simple' },
+      },
+      classifier: { model: 'global-classifier', timeout_ms: 1500 },
+      debug: { enabled: true },
     });
+    writeConfig(projectDir, {
+      tiers: {
+        SIMPLE: { mode: 'delegate', model: 'project-simple' },
+      },
+      classifier: { timeout_ms: 2500 },
+      debug: { prompt_preview_chars: 80 },
+    });
+
+    const config = loadConfig(projectDir);
+
+    expect(config.tiers.SIMPLE).toEqual({ mode: 'delegate', model: 'project-simple' });
+    expect(config.classifier).toEqual({ model: 'global-classifier', timeout_ms: 2500 });
+    expect(config.debug).toEqual({ enabled: true, prompt_preview_chars: 80 });
   });
 
-  describe('precedence', () => {
-    it('global sets LOW to X, project sets LOW to Y → Y wins', () => {
-      writeGlobalConfig({ tiers: { LOW: 'global-haiku' } });
-      writeProjectConfig({ tiers: { LOW: 'project-haiku' } });
-      const config = loadConfig(projectDir);
-      expect(config.tiers.LOW).toBe('project-haiku');
+  it('accepts direct execution without a model', () => {
+    writeConfig(projectDir, {
+      tiers: {
+        COMPLEX: { mode: 'direct' },
+      },
     });
 
-    it('global sets conservative: true, project does not set it → stays true', () => {
-      writeGlobalConfig({ conservative: true });
-      // Project config only sets a tier, not conservative
-      writeProjectConfig({ tiers: { LOW: 'claude-haiku-custom' } });
-      const config = loadConfig(projectDir);
-      expect(config.conservative).toBe(true);
-    });
-
-    it('project sets conservative: false, global sets true → false wins', () => {
-      writeGlobalConfig({ conservative: true });
-      writeProjectConfig({ conservative: false });
-      const config = loadConfig(projectDir);
-      expect(config.conservative).toBe(false);
-    });
+    expect(loadConfig(projectDir).tiers.COMPLEX).toEqual({ mode: 'direct' });
   });
 
-  describe('resilience', () => {
-    it('global config is empty file → defaults, no crash', () => {
-      writeFileSync(path.join(homeDir, '.claude-router.json'), '', 'utf-8');
-      const config = loadConfig(projectDir);
-      expect(config.tiers.LOW).toBe('claude-haiku-4-5-20251001');
+  it('ignores a delegate tier without a model and fails open to the previous valid execution', () => {
+    writeConfig(projectDir, {
+      tiers: {
+        EXTREME: { mode: 'delegate' },
+      },
     });
 
-    it('global config is invalid JSON → defaults, no crash', () => {
-      writeFileSync(path.join(homeDir, '.claude-router.json'), '{not valid json', 'utf-8');
-      const config = loadConfig(projectDir);
-      expect(config.tiers.LOW).toBe('claude-haiku-4-5-20251001');
-    });
-
-    it('global config is a JSON array → defaults, no crash', () => {
-      writeFileSync(path.join(homeDir, '.claude-router.json'), '[1, 2, 3]', 'utf-8');
-      const config = loadConfig(projectDir);
-      expect(config.tiers.LOW).toBe('claude-haiku-4-5-20251001');
-    });
-
-    it('global config has extra unknown fields → ignored, no crash', () => {
-      writeGlobalConfig({ tiers: { LOW: 'claude-haiku-custom' }, banana: true, nested: { a: 1 } });
-      const config = loadConfig(projectDir);
-      expect(config.tiers.LOW).toBe('claude-haiku-custom');
-      expect((config as any).banana).toBeUndefined();
-    });
-
-    it('global config has tiers as a string → defaults for tiers, no crash', () => {
-      writeGlobalConfig({ tiers: 'not an object' });
-      const config = loadConfig(projectDir);
-      expect(config.tiers.LOW).toBeDefined();
-      expect(config.tiers.MEDIUM).toBeDefined();
-      expect(config.tiers.HIGH).toBeDefined();
-    });
-
-    it('project overrides one tier, global overrides another → both applied', () => {
-      writeGlobalConfig({ tiers: { LOW: 'global-haiku' } });
-      writeProjectConfig({ tiers: { MEDIUM: 'project-sonnet' } });
-      const config = loadConfig(projectDir);
-      expect(config.tiers.LOW).toBe('global-haiku');
-      expect(config.tiers.MEDIUM).toBe('project-sonnet');
-      expect(config.tiers.HIGH).toBe('claude-opus-4-6');
-    });
+    expect(loadConfig(projectDir).tiers.EXTREME).toEqual({ mode: 'delegate', model: 'fable' });
   });
 
-  describe('path handling', () => {
-    it('global config uses os.homedir()', () => {
-      writeGlobalConfig({ conservative: true });
-      const config = loadConfig(projectDir);
-      expect(config.conservative).toBe(true);
+  it('ignores an invalid execution mode', () => {
+    writeConfig(projectDir, {
+      tiers: {
+        STANDARD: { mode: 'remote', model: 'unknown' },
+      },
     });
 
-    it('CWD resolution uses provided cwd parameter', () => {
-      const otherProject = path.join(tmpDir, 'other-project');
-      mkdirSync(otherProject, { recursive: true });
-      writeFileSync(
-        path.join(otherProject, '.claude-router.json'),
-        JSON.stringify({ conservative: true }),
-        'utf-8'
-      );
-      const config = loadConfig(otherProject);
-      expect(config.conservative).toBe(true);
+    expect(loadConfig(projectDir).tiers.STANDARD).toEqual({ mode: 'direct' });
+  });
+
+  it('ignores an invalid fallback tier', () => {
+    writeConfig(projectDir, { fallback_tier: 'HIGH' });
+
+    expect(loadConfig(projectDir).fallback_tier).toBe('STANDARD');
+  });
+
+  it('uses the default timeout when a standalone invalid timeout is supplied', () => {
+    writeConfig(projectDir, { classifier: { timeout_ms: -1 } });
+
+    expect(loadConfig(projectDir).classifier.timeout_ms).toBe(3000);
+  });
+
+  it('supports configurable manual overrides', () => {
+    writeConfig(projectDir, {
+      overrides: {
+        '//architect': 'EXTREME',
+      },
     });
+
+    const config = loadConfig(projectDir);
+
+    expect(config.overrides['//architect']).toBe('EXTREME');
+    expect(config.overrides['//trivial']).toBe('TRIVIAL');
+  });
+
+  it('ignores malformed JSON and non-object configuration roots', () => {
+    writeFileSync(path.join(homeDir, '.claude-router.json'), '{invalid', 'utf-8');
+    writeFileSync(path.join(projectDir, '.claude-router.json'), '[]', 'utf-8');
+
+    expect(loadConfig(projectDir).tiers.STANDARD).toEqual({ mode: 'direct' });
   });
 });

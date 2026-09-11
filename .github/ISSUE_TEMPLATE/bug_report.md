@@ -23,5 +23,9 @@ labels: bug
 
 **Hook registration**
 ```
-(paste output of `cat ~/.claude/settings.json | jq '.hooks.UserPromptSubmit'`)
+(paste the `hooks.UserPromptSubmit` entry from ~/.claude/settings.json here)
 ```
+
+**Provider mapping, if relevant**
+
+If the configured alias was not resolved to the expected final Provider model, include the Provider or Gateway request log's `model` field with secrets removed. ClaudeRouter can report its configured alias but cannot verify external model resolution.

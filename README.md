@@ -3,15 +3,17 @@
 [![npm version](https://img.shields.io/npm/v/@0dust/claude-router.svg)](https://www.npmjs.com/package/@0dust/claude-router)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**Stop burning Opus tokens on grep.** ClaudeRouter classifies every prompt before it hits the model — routing simple tasks to Haiku, feature work to Sonnet, and architecture to Opus. Ships as a Claude Code plugin. Zero config.
+**Configuration-driven prompt routing for Claude Code.** ClaudeRouter classifies a prompt into one of five complexity tiers, then either keeps the task with the main agent or emits a directive to delegate it using the model alias configured for that tier.
 
+ClaudeRouter deliberately does **not** decide or verify the final Provider model. Aliases such as `haiku`, `sonnet`, `opus`, and `fable` are configuration values only; their resolution is owned by Claude Code and any configured Provider or Gateway.
 
 ## Prerequisites
 
 - **Node.js 18+**
 - **Claude Code** installed ([install guide](https://docs.anthropic.com/en/docs/claude-code))
-- **Claude Pro or Max subscription** (required for subagent delegation)
-- **jq** — the hook script depends on it (`brew install jq` / `apt install jq`)
+- A Claude Code plan and environment that support the delegation requested by your configured model aliases
+
+The hook is a compiled Node program. It does not require `bash`, `sh`, `jq`, `grep`, `sed`, `awk`, or `/tmp`.
 
 ## Installation
 
@@ -31,222 +33,234 @@ npm install -g .
 claude-router init
 ```
 
-This will:
-- Verify dependencies (`jq`)
-- Register the `UserPromptSubmit` hook in `~/.claude/settings.json`
-- Append the routing directive to your project's `CLAUDE.md` (with markers for clean removal)
+`init` registers this absolute command in `~/.claude/settings.json`:
 
-You can also target a specific project directory:
+```text
+node <absolute-package-path>/dist/hooks/user-prompt-submit.js
+```
+
+It also appends the managed ClaudeRouter directive block to the target project's `CLAUDE.md`. To target another project:
 
 ```bash
 claude-router init /path/to/your/project
 ```
 
-## Verify It's Working
-
-Run the diagnostic check:
+## Verify installation
 
 ```bash
 claude-router doctor
-```
-
-After a few prompts, check your routing stats:
-
-```bash
 claude-router stats
 ```
 
-If counts are incrementing, routing is active. You can also check the hook is registered:
+`doctor` verifies Node, the compiled Node hook, hook registration, the `CLAUDE.md` marker, and packaged runtime files. If routing events accumulate, the hook is active.
 
-```bash
-cat ~/.claude/settings.json | jq '.hooks.UserPromptSubmit'
-```
+## How routing works
 
-## How It Works
+1. **Synchronous signals** — `quickClassify()` recognizes only high-confidence cases. Follow-ups such as `yes`, `ok`, and `continue` remain `STANDARD`; prompt length alone never escalates a task.
+2. **Classifier model** — prompts not resolved by signals are classified by `classifier.model`.
+3. **Fallback** — classifier failures, timeouts, and invalid responses return `fallback_tier`.
+4. **Configured execution** — the effective tier is looked up in `tiers`. A `direct` tier yields no directive; a `delegate` tier yields a `[ROUTER]` directive containing its configured model alias.
 
-ClaudeRouter intercepts every `UserPromptSubmit` hook, classifies the prompt's complexity, and injects a routing directive into Claude's context. Claude then delegates to the appropriate subagent model.
+The five ordered tiers are:
 
-| Tier | Model | Example Prompts | Savings vs Opus |
-|------|-------|----------------|-----------------|
-| **LOW** | Haiku | "what does this function do?", "yes do it", file reads, grep | ~95% |
-| **MEDIUM** | Sonnet | "add an endpoint for X", "fix this bug", "write tests for Y" | ~60% |
-| **HIGH** | Opus | "redesign the auth layer", "review this architecture" | 0% (correct spend) |
+| Tier | Intended use |
+|------|--------------|
+| `TRIVIAL` | Narrow mechanical work, navigation, tiny edits, or simple explanations |
+| `SIMPLE` | Explicit, local, low-risk implementation work |
+| `STANDARD` | Ordinary engineering features, fixes, and routine refactoring |
+| `COMPLEX` | Cross-module debugging, difficult integrations, concurrency, or deep analysis |
+| `EXTREME` | System-wide architecture, major migrations, or whole-repository investigation |
 
-### Classification Pipeline
+## Default execution
 
-1. **Pre-Haiku heuristics** (synchronous, zero cost) — catches ~30% of LOW prompts via token count, keyword matching, and confirmation detection. No API call needed.
-2. **Haiku classification** (async, <$0.001) — sends the prompt to Haiku with a structured classification prompt. Returns LOW, MEDIUM, or HIGH.
-3. **Context injection** — the routing directive is injected as context. Claude reads it and delegates to the appropriate subagent.
+| Tier | Default execution |
+|------|-------------------|
+| `TRIVIAL` | `delegate` using `haiku` |
+| `SIMPLE` | `delegate` using `sonnet` |
+| `STANDARD` | `direct` |
+| `COMPLEX` | `delegate` using `opus` |
+| `EXTREME` | `delegate` using `fable` |
 
-### Routing Directives
-
-- **LOW** → Claude spawns a Haiku subagent via the Agent tool
-- **MEDIUM** → Claude spawns a Sonnet subagent via the Agent tool
-- **HIGH** → Claude handles the task directly with full reasoning
-- **Override** → User prefixed with `//opus`, Claude handles directly
-
-## Stats
-
-Track your routing efficiency:
-
-```bash
-claude-router stats
-```
-
-```
-ClaudeRouter — last 7 days
-─────────────────────────────────────────
-Prompts routed:        847
-LOW  → Haiku:          312   (36.8%)
-MED  → Sonnet:         431   (50.9%)
-HIGH → Opus:           104   (12.3%)
-Estimated Opus saved:   148.6K tokens
-Follow-up rate (LOW):   4.1%    ← routing accuracy
-Manual overrides:       7
-─────────────────────────────────────────
-```
-
-Use `--days N` to change the window: `claude-router stats --days 30`
-
-## Failure Behavior
-
-ClaudeRouter is designed to never block Claude Code:
-
-- **Classifier fails**: Falls back to MEDIUM (Sonnet) — the safe middle ground
-- **API timeout**: Haiku classification has a 3-second timeout; on timeout, falls back to MEDIUM
-- **No internet**: Pre-Haiku heuristics still work (catches ~30% of prompts); the rest fall back to MEDIUM
-- **Missing dependencies**: Hook exits silently with no directive; Claude handles the prompt normally on whatever model the session is using
-- **Any unexpected error**: The hook always exits 0 and never blocks the user's prompt
+These are defaults, not fixed model policy. Any tier, including `STANDARD`, can be `direct` or `delegate` through configuration.
 
 ## Configuration
 
-ClaudeRouter works with zero configuration. To customize, create `.claude-router.json` in your project root or `~/.claude-router.json` globally:
+ClaudeRouter merges configuration in this order:
+
+```text
+built-in defaults → ~/.claude-router.json → <project>/.claude-router.json
+```
+
+Nested objects are schema-aware and deep-merged. A project may override one tier without replacing the remaining tiers. Invalid configuration is ignored with a warning while the last safe value remains active.
+
+Example `.claude-router.json`:
 
 ```json
 {
   "tiers": {
-    "LOW": "claude-haiku-4-5-20251001",
-    "MEDIUM": "claude-sonnet-4-6",
-    "HIGH": "claude-opus-4-6"
+    "TRIVIAL": { "mode": "delegate", "model": "fast-alias" },
+    "SIMPLE": { "mode": "delegate", "model": "balanced-alias" },
+    "STANDARD": { "mode": "direct" },
+    "COMPLEX": { "mode": "delegate", "model": "reasoning-alias" },
+    "EXTREME": { "mode": "delegate", "model": "frontier-alias" }
   },
-  "fallback": "claude-sonnet-4-6",
+  "classifier": {
+    "model": "classifier-alias",
+    "timeout_ms": 3000
+  },
+  "fallback_tier": "STANDARD",
   "conservative": false,
-  "override_keyword": "//opus"
+  "overrides": {
+    "//quick": "TRIVIAL",
+    "//deep": "EXTREME"
+  },
+  "debug": {
+    "enabled": false,
+    "prompt_preview_chars": 150
+  }
 }
 ```
 
+### Configuration fields
+
 | Field | Default | Description |
 |-------|---------|-------------|
-| `tiers.LOW` | `claude-haiku-4-5-20251001` | Model for trivial tasks |
-| `tiers.MEDIUM` | `claude-sonnet-4-6` | Model for standard engineering work |
-| `tiers.HIGH` | `claude-opus-4-6` | Model for deep reasoning tasks |
-| `fallback` | `claude-sonnet-4-6` | Model used when classification fails |
-| `conservative` | `false` | Shift all routes one tier up (LOW→Sonnet, MEDIUM→Opus) |
-| `override_keyword` | `//opus` | Prefix to force Opus on any turn |
+| `tiers.<TIER>` | See [Default execution](#default-execution) | `{ "mode": "direct" }` or `{ "mode": "delegate", "model": "alias" }` |
+| `classifier.model` | `haiku` | Alias sent to the classifier API; `CLAUDE_ROUTER_CLASSIFIER_MODEL` takes precedence |
+| `classifier.timeout_ms` | `3000` | Classifier request timeout in milliseconds |
+| `fallback_tier` | `STANDARD` | Safe tier used if classification cannot complete |
+| `conservative` | `false` | Shifts the classified tier up one step before its execution is resolved |
+| `overrides` | Five `//<tier>` prefixes | Maps case-insensitive prompt prefixes to tiers; the longest matching prefix wins |
+| `debug.enabled` | `false` | Enables hook debug JSONL output |
+| `debug.prompt_preview_chars` | `150` | Maximum preview length written by debug logging |
 
-Config is merged in order: hardcoded defaults → `~/.claude-router.json` → CWD `.claude-router.json`. Later values override earlier ones.
+An override removes its prefix before routing and bypasses classification:
 
-### Team Configuration
+```text
+//deep investigate this production race condition
+```
 
-To share routing config across a team, commit `.claude-router.json` to your
-repo (you may need to remove it from `.gitignore`). Individual developers can
-still override with `~/.claude-router.json` for personal preferences.
+The default prefixes are `//trivial`, `//simple`, `//standard`, `//complex`, and `//extreme`.
+
+## Observability and privacy
+
+Routing events are written to `~/.claude-router/events.jsonl`. They contain a SHA-256 prompt hash, token estimate, tier, source, execution mode, timing, and—only for delegated work—the configured alias in `configured_model`. Raw prompts and API keys are never written to this telemetry file.
+
+Set `CLAUDE_ROUTER_DEBUG=1` or `debug.enabled: true` to additionally write `~/.claude-router/debug.jsonl`. Debug records contain only the configured-length `prompt_preview`, never the full prompt or an API key.
+
+`configured_model` means **the alias selected by ClaudeRouter**, not the final Provider model actually used. Verify the final model mapping from your Provider or Gateway request logs and their `model` field.
+
+## Stats
+
+```bash
+claude-router stats --days 30
+```
+
+The report shows every tier, current configured execution targets, direct/delegated counts, classifier fallbacks, manual overrides, and the `TRIVIAL` follow-up rate. It does not estimate token or cost savings, and it does not claim a Provider model was used.
+
+Example:
+
+```text
+ClaudeRouter — last 7 days
+----------------------------------------------------------
+Prompts routed:          42
+TRIVIAL  → delegate (fast-alias)       10   (23.8%)
+SIMPLE   → delegate (balanced-alias)   12   (28.6%)
+STANDARD → direct                       8   (19.0%)
+COMPLEX  → delegate (reasoning-alias)   7   (16.7%)
+EXTREME  → delegate (frontier-alias)    5   (11.9%)
+Direct executions:         8
+Delegated executions:     34
+Classifier fallbacks:      1
+Manual overrides:          2
+Follow-up rate (TRIVIAL): 0.0%  ← lower is better
+----------------------------------------------------------
+```
+
+## CLI and SDK
+
+```bash
+# Inspect a full routing decision.
+claude-router route "add user authentication" --format full
+
+# Print only the configured delegate alias; direct execution prints nothing.
+claude-router route "find calculatePrice" --format model
+
+# Read a prompt from stdin without placing it in command arguments.
+claude-router route --stdin --format full
+```
+
+```typescript
+import {
+  classify,
+  createRouter,
+  loadConfig,
+  route,
+  type Tier,
+} from '@0dust/claude-router';
+
+const classification = await classify('fix the typo on line 42');
+// { tier: 'TRIVIAL', source: 'signal', ... }
+
+const config = loadConfig();
+const decision = await route('add user authentication', config);
+// { tier: 'STANDARD', execution: { mode: 'direct' }, directive: null, ... }
+
+const router = createRouter({ telemetry: true });
+await router.route('redesign the authentication architecture');
+console.log(router.stats());
+// { total: 1, tiers: { TRIVIAL: 0, SIMPLE: 0, STANDARD: 0, COMPLEX: 0, EXTREME: 1 }, ... }
+```
+
+- `classify(prompt)` — full signal and classifier pipeline
+- `quickClassify(prompt)` — signal-only tier or `null`
+- `route(prompt, config)` — execution-aware routing decision
+- `loadConfig(cwd?)` — merged configuration
+- `createRouter(options?)` — stateful router with session statistics
+
+## Failure behavior
+
+ClaudeRouter is fail-open and never intentionally blocks Claude Code:
+
+- Classifier errors, timeouts, and malformed results use `fallback_tier`.
+- Hook parsing, configuration, telemetry, and debug errors produce no directive and exit successfully.
+- `is_subagent: true` prevents recursive hook routing for subagents.
+- A `direct` execution deliberately emits no directive, leaving the task with the main agent.
 
 ## Troubleshooting
 
-**Stats show zero events after using Claude Code**
-The hook may not be registered. Check:
-```bash
-cat ~/.claude/settings.json | jq '.hooks.UserPromptSubmit'
-```
-If empty, re-run `claude-router init`.
+**`claude-router doctor` reports a missing compiled hook**
 
-**Hook not firing**
-1. Verify `jq` is installed: `command -v jq`
-2. Verify the hook script exists at the path shown in settings.json
-3. Verify the hook is executable: `ls -la $(which claude-router)`
+Run `npm run build`, then run `claude-router init` again.
 
-**jq not installed**
-The hook exits silently without jq. Install it:
-- macOS: `brew install jq`
-- Ubuntu/Debian: `sudo apt install jq`
-- Arch: `sudo pacman -S jq`
+**No events appear in stats**
 
-**claude-router command not found after install**
-If installed via `npm install -g .`, ensure your npm global bin directory
-is in your PATH: `npm bin -g`
+Run `claude-router doctor`. It checks whether the absolute Node hook command is registered in `~/.claude/settings.json`.
 
-**I see [ROUTER] lines in my Claude Code transcript**
-This is normal. The routing directive is visible in the transcript as hook
-output, but Claude follows it silently and does not mention it in responses.
+**A prompt unexpectedly stays with the main agent**
 
-**All prompts routing to Sonnet (MEDIUM)**
-This is the fallback behavior when Haiku classification fails. Verify that
-Claude Code can reach the Anthropic API (this requires an active Claude
-Pro or Max subscription).
+Inspect the relevant tier in `.claude-router.json`. `direct` is an intentional execution mode and returns an empty hook output.
 
-## Override Keyword
+**All uncertain prompts use one tier**
 
-Prefix any prompt with `//opus` to bypass classification and force Opus:
+Check `fallback_tier`, `classifier.model`, `CLAUDE_ROUTER_CLASSIFIER_MODEL`, and the classifier API environment. The fallback is normally `STANDARD`.
 
-```
-//opus explain the tradeoffs between these two architectures
-```
+**The configured alias did not become the expected Provider model**
 
-This routes directly to Opus regardless of what the classifier would have chosen. The keyword is stripped from the prompt before processing.
+ClaudeRouter has completed its routing decision, but alias resolution occurs outside ClaudeRouter. Inspect the Provider or Gateway request log's `model` field to validate the actual mapping.
 
-## SDK Usage
+**I see `[ROUTER]` in a Claude Code transcript**
 
-The routing logic is available as a standalone SDK for any Claude-based agent stack:
-
-```typescript
-import { classify, route, createRouter } from 'claude-router';
-
-// Single classification call
-const result = await classify('fix the typo on line 42');
-// { tier: 'LOW', source: 'signal', latency_ms: 0, prompt_tokens: 7 }
-
-// Full routing decision
-const config = loadConfig();
-const decision = await route('add user authentication', config);
-// { model: 'claude-sonnet-4-6', tier: 'MEDIUM', source: 'haiku', ... }
-
-// Stateful router with telemetry
-const router = createRouter({ telemetry: true });
-const d = await router.route('redesign the auth layer');
-console.log(router.stats());
-// { total: 1, low: 0, medium: 0, high: 1, overrides: 0, avg_latency_ms: 12 }
-```
-
-### API
-
-- **`classify(prompt)`** — Returns `ClassificationResult` with tier, source, latency, and token count
-- **`quickClassify(prompt)`** — Synchronous heuristic-only classification. Returns tier or `null`
-- **`route(prompt, config)`** — Full routing decision with model, directive, and metadata
-- **`loadConfig()`** — Load merged config from defaults + global + local files
-- **`createRouter(options?)`** — Stateful router instance with `.route()` and `.stats()` methods
-
-## How the Plugin Works
-
-ClaudeRouter uses Claude Code's `UserPromptSubmit` hook to inject routing directives as context. The `CLAUDE.md` file in your project root instructs Claude to follow these directives transparently — delegating to Haiku or Sonnet subagents for lower-complexity tasks.
-
-This approach:
-- **Requires no model mutation** — works within the existing hook API
-- **Is minimally visible** — routing directives appear in the transcript but Claude does not mention or acknowledge them to the user
-- **Includes an infinite loop guard** — subagents don't re-trigger the classification hook
+This is expected for delegated routes. It is hook output consumed as context; the runtime directive tells Claude to follow it silently.
 
 ## Uninstallation
 
 ```bash
 claude-router remove
-npm uninstall -g claude-router
+npm uninstall -g @0dust/claude-router
 ```
 
-This removes:
-- The `UserPromptSubmit` hook from `~/.claude/settings.json`
-- The `<!-- claude-router:start -->` ... `<!-- claude-router:end -->` block from your project's `CLAUDE.md`
-
-Telemetry data in `~/.claude-router/` is preserved. Delete it manually if desired.
+This removes ClaudeRouter's registered `UserPromptSubmit` command and the managed marker block from the chosen project's `CLAUDE.md`. Telemetry and debug data in `~/.claude-router/` are retained; delete them manually if no longer needed.
 
 ## Contributing
 

@@ -17,15 +17,6 @@ vi.mock('os', async (importOriginal) => {
   return { ...actual, homedir: getHomedir };
 });
 
-// Mock child_process.execSync so jq check always passes
-vi.mock('child_process', async (importOriginal) => {
-  const actual = (await importOriginal()) as any;
-  return {
-    ...actual,
-    execSync: vi.fn().mockReturnValue(Buffer.from('/usr/bin/jq\n')),
-  };
-});
-
 import { handleInit, handleRemove } from '../../src/cli/init';
 
 let tmpDir: string;
@@ -57,6 +48,26 @@ function readSettings(): any {
   return JSON.parse(fs.readFileSync(settingsPath(), 'utf-8'));
 }
 
+function userPromptSubmitHooks(settings: any): any[] {
+  return settings.hooks?.UserPromptSubmit ?? [];
+}
+
+function routerHookEntries(settings: any): any[] {
+  return userPromptSubmitHooks(settings).filter(
+    (entry: any) => Array.isArray(entry?.hooks) && entry.hooks.some(
+      (hook: any) => typeof hook?.command === 'string' && hook.command.includes('user-prompt-submit.js'),
+    ),
+  );
+}
+
+function hasCommand(settings: any, command: string): boolean {
+  return userPromptSubmitHooks(settings).some(
+    (entry: any) => Array.isArray(entry?.hooks) && entry.hooks.some(
+      (hook: any) => hook?.command === command,
+    ),
+  );
+}
+
 function claudeMdPath(): string {
   return path.join(projectDir, 'CLAUDE.md');
 }
@@ -67,11 +78,15 @@ describe('install/uninstall e2e', () => {
       handleInit([projectDir]);
       expect(fs.existsSync(settingsPath())).toBe(true);
       const settings = readSettings();
-      const hooks = settings.hooks.UserPromptSubmit;
-      const routerHooks = hooks.filter(
-        (h: any) => typeof h === 'object' && h.command && h.command.includes('user-prompt-submit.sh')
-      );
-      expect(routerHooks.length).toBe(1);
+      const routerHooks = routerHookEntries(settings);
+      expect(routerHooks).toHaveLength(1);
+      expect(routerHooks[0]).toMatchObject({
+        matcher: '',
+        hooks: [{
+          type: 'command',
+          command: expect.stringMatching(/^node \".+[\\/]dist[\\/]hooks[\\/]user-prompt-submit\.js\"$/),
+        }],
+      });
     });
 
     it('fresh install → ClaudeRouter section appears in CLAUDE.md', () => {
@@ -94,18 +109,21 @@ describe('install/uninstall e2e', () => {
         settingsPath(),
         JSON.stringify({
           hooks: {
-            UserPromptSubmit: [{ type: 'command', command: '/usr/bin/other-hook' }],
-            PreToolUse: [{ type: 'command', command: '/usr/bin/pre-tool' }],
+            UserPromptSubmit: [{
+              matcher: '',
+              hooks: [{ type: 'command', command: '/usr/bin/other-hook' }],
+            }],
+            PreToolUse: [{
+              matcher: '',
+              hooks: [{ type: 'command', command: '/usr/bin/pre-tool' }],
+            }],
           },
         }),
         'utf-8'
       );
       handleInit([projectDir]);
       const settings = readSettings();
-      const otherHook = settings.hooks.UserPromptSubmit.find(
-        (h: any) => h.command === '/usr/bin/other-hook'
-      );
-      expect(otherHook).toBeDefined();
+      expect(hasCommand(settings, '/usr/bin/other-hook')).toBe(true);
       expect(settings.hooks.PreToolUse).toBeDefined();
     });
 
@@ -122,11 +140,23 @@ describe('install/uninstall e2e', () => {
       handleInit([projectDir]);
       handleInit([projectDir]);
       const settings = readSettings();
-      const hooks = settings.hooks.UserPromptSubmit;
-      const routerHooks = hooks.filter(
-        (h: any) => typeof h === 'object' && h.command && h.command.includes('user-prompt-submit.sh')
-      );
+      const routerHooks = routerHookEntries(settings);
       expect(routerHooks.length).toBe(1);
+    });
+
+    it('install migrates a legacy direct command registration', () => {
+      handleInit([projectDir]);
+      const settings = readSettings();
+      const legacyActions = routerHookEntries(settings)[0].hooks;
+      settings.hooks.UserPromptSubmit = legacyActions;
+      fs.writeFileSync(settingsPath(), JSON.stringify(settings), 'utf-8');
+
+      handleInit([projectDir]);
+      const migrated = readSettings();
+      const routerHooks = routerHookEntries(migrated);
+      expect(routerHooks).toHaveLength(1);
+      expect(routerHooks[0].matcher).toBe('');
+      expect(routerHooks[0].hooks).toHaveLength(1);
     });
 
     it('install twice → CLAUDE.md section appears exactly once (idempotent)', () => {
@@ -143,10 +173,7 @@ describe('install/uninstall e2e', () => {
       handleInit([projectDir]);
       handleRemove([projectDir]);
       const settings = readSettings();
-      const hooks = settings.hooks?.UserPromptSubmit ?? [];
-      const routerHooks = hooks.filter(
-        (h: any) => typeof h === 'object' && h.command && h.command.includes('user-prompt-submit.sh')
-      );
+      const routerHooks = routerHookEntries(settings);
       expect(routerHooks.length).toBe(0);
     });
 
@@ -157,7 +184,10 @@ describe('install/uninstall e2e', () => {
         settingsPath(),
         JSON.stringify({
           hooks: {
-            UserPromptSubmit: [{ type: 'command', command: '/usr/bin/other-hook' }],
+            UserPromptSubmit: [{
+              matcher: '',
+              hooks: [{ type: 'command', command: '/usr/bin/other-hook' }],
+            }],
           },
         }),
         'utf-8'
@@ -165,10 +195,7 @@ describe('install/uninstall e2e', () => {
       handleInit([projectDir]);
       handleRemove([projectDir]);
       const settings = readSettings();
-      const otherHook = settings.hooks.UserPromptSubmit.find(
-        (h: any) => h.command === '/usr/bin/other-hook'
-      );
-      expect(otherHook).toBeDefined();
+      expect(hasCommand(settings, '/usr/bin/other-hook')).toBe(true);
     });
 
     it('after install, uninstall → ClaudeRouter section removed from CLAUDE.md', () => {
@@ -208,10 +235,7 @@ describe('install/uninstall e2e', () => {
       handleRemove([projectDir]);
       handleInit([projectDir]);
       const settings = readSettings();
-      const hooks = settings.hooks.UserPromptSubmit;
-      const routerHooks = hooks.filter(
-        (h: any) => typeof h === 'object' && h.command && h.command.includes('user-prompt-submit.sh')
-      );
+      const routerHooks = routerHookEntries(settings);
       expect(routerHooks.length).toBe(1);
       const content = fs.readFileSync(claudeMdPath(), 'utf-8');
       expect(content).toContain('<!-- claude-router:start -->');

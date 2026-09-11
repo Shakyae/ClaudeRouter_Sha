@@ -1,61 +1,88 @@
 import { classify } from '../classifier/classifier';
-import { resolveModel, shiftUp } from './model-map';
+import type { ExecutionConfig, RoutingDecision, Tier } from '../types';
 import type { RouterConfig } from './config';
-import type { Tier } from '../classifier/signals';
+import { resolveExecution, shiftUp } from './model-map';
 
-export interface RoutingDecision {
-  model: string;
-  tier: Tier;
-  source: 'signal' | 'haiku' | 'fallback' | 'override';
-  original_prompt: string;
-  stripped_prompt: string;
-  directive: string;
-  latency_ms: number;
+export type { RoutingDecision } from '../types';
+
+export function buildDirective(tier: Tier, execution: ExecutionConfig): string | null {
+  if (execution.mode === 'direct') {
+    return null;
+  }
+
+  return [
+    `[ROUTER] Complexity: ${tier}.`,
+    `Delegate the entire task to a subagent using model "${execution.model}".`,
+    'Let the subagent inspect and modify the repository as needed.',
+    'After it finishes, do not redo the implementation independently.',
+  ].join(' ');
 }
 
-const DIRECTIVES: Record<Tier, string> = {
-  LOW: '[ROUTER] Complexity: LOW. Delegate this entire task to a Haiku subagent via the Agent tool and return its response verbatim. Do not add commentary.',
-  MEDIUM: '[ROUTER] Complexity: MEDIUM. Delegate this entire task to a Sonnet subagent via the Agent tool and return its response verbatim. Do not add commentary.',
-  HIGH: '[ROUTER] Complexity: HIGH. Handle this task directly with full reasoning.',
-};
+function findOverride(prompt: string, config: RouterConfig): { tier: Tier; strippedPrompt: string } | null {
+  const trimmed = prompt.trimStart();
+  const prefixes = Object.keys(config.overrides).sort((left, right) => right.length - left.length);
 
-const OVERRIDE_DIRECTIVE = '[ROUTER] User explicitly requested Opus. Handle this task directly.';
+  for (const prefix of prefixes) {
+    const afterPrefix = trimmed.slice(prefix.length);
+    if (
+      trimmed.toLowerCase().startsWith(prefix.toLowerCase()) &&
+      (afterPrefix === '' || /^\s/.test(afterPrefix))
+    ) {
+      return {
+        tier: config.overrides[prefix],
+        strippedPrompt: afterPrefix.trimStart(),
+      };
+    }
+  }
+
+  return null;
+}
+
+function effectiveTier(tier: Tier, config: RouterConfig): Tier {
+  return config.conservative ? shiftUp(tier) : tier;
+}
 
 export async function route(prompt: string, config: RouterConfig): Promise<RoutingDecision> {
   const start = Date.now();
-  const keyword = config.override_keyword.toLowerCase();
-  const trimmed = prompt.trimStart();
+  const override = findOverride(prompt, config);
 
-  // Check for override keyword
-  const afterKeyword = trimmed.slice(keyword.length);
-  if (keyword.length > 0 && trimmed.toLowerCase().startsWith(keyword) && (afterKeyword === '' || /^\s/.test(afterKeyword))) {
-    const stripped = afterKeyword.trimStart();
+  if (override) {
+    const tier = effectiveTier(override.tier, config);
+    const execution = resolveExecution(override.tier, config);
     return {
-      model: config.tiers.HIGH,
-      tier: 'HIGH',
+      tier,
       source: 'override',
-      original_prompt: prompt,
-      stripped_prompt: stripped,
-      directive: OVERRIDE_DIRECTIVE,
-      latency_ms: Date.now() - start,
+      execution,
+      directive: buildDirective(tier, execution),
+      latencyMs: Date.now() - start,
+      strippedPrompt: override.strippedPrompt,
     };
   }
 
-  // Classify the prompt
-  const classification = await classify(prompt);
+  try {
+    const classification = await classify(prompt, config);
+    const tier = effectiveTier(classification.tier, config);
+    const execution = resolveExecution(classification.tier, config);
 
-  // Determine effective tier for directive (may differ from classification if conservative)
-  const effectiveTier = config.conservative ? shiftUp(classification.tier) : classification.tier;
-  const model = config.tiers[effectiveTier] ?? config.fallback;
-  const directive = DIRECTIVES[effectiveTier];
-
-  return {
-    model,
-    tier: classification.tier,
-    source: classification.source,
-    original_prompt: prompt,
-    stripped_prompt: prompt,
-    directive,
-    latency_ms: Date.now() - start,
-  };
+    return {
+      tier,
+      source: classification.source,
+      execution,
+      directive: buildDirective(tier, execution),
+      classifierModel: classification.classifierModel,
+      latencyMs: Date.now() - start,
+      strippedPrompt: prompt,
+    };
+  } catch {
+    const tier = effectiveTier(config.fallback_tier, config);
+    const execution = resolveExecution(config.fallback_tier, config);
+    return {
+      tier,
+      source: 'fallback',
+      execution,
+      directive: buildDirective(tier, execution),
+      latencyMs: Date.now() - start,
+      strippedPrompt: prompt,
+    };
+  }
 }

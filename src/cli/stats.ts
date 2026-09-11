@@ -1,77 +1,56 @@
-import { readEvents, type RoutingEvent } from '../telemetry/logger';
 import { computeFollowupStats } from '../telemetry/feedback';
+import { readEvents } from '../telemetry/logger';
+import { loadConfig, type RouterConfig } from '../router/config';
+import { TIERS, type Tier } from '../types';
 
-interface StatsResult {
+export interface StatsResult {
   days: number;
   total: number;
-  low: number;
-  medium: number;
-  high: number;
-  savedTokens: number;
-  followupRate: number;
+  tierCounts: Record<Tier, number>;
+  direct: number;
+  delegated: number;
+  fallbacks: number;
   manualOverrides: number;
+  followupRate: number;
 }
 
-function computeStats(days: number): StatsResult {
-  const events = readEvents();
+export function computeStats(days: number): StatsResult {
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - days);
   const cutoffIso = cutoff.toISOString();
-
-  const filtered = events.filter((e) => e.ts >= cutoffIso);
-
-  let low = 0;
-  let medium = 0;
-  let high = 0;
-  let overrides = 0;
-  let savedTokens = 0;
+  const filtered = readEvents().filter((event) => event.ts >= cutoffIso);
+  const tierCounts = Object.fromEntries(TIERS.map((tier) => [tier, 0])) as Record<Tier, number>;
+  let direct = 0;
+  let delegated = 0;
+  let fallbacks = 0;
+  let manualOverrides = 0;
 
   for (const event of filtered) {
-    switch (event.tier) {
-      case 'LOW':
-        low++;
-        savedTokens += event.prompt_tokens || 0;
-        break;
-      case 'MEDIUM':
-        medium++;
-        savedTokens += event.prompt_tokens || 0;
-        break;
-      case 'HIGH':
-        high++;
-        break;
+    tierCounts[event.tier]++;
+
+    if (event.execution_mode === 'direct') {
+      direct++;
+    } else {
+      delegated++;
+    }
+    if (event.source === 'fallback') {
+      fallbacks++;
     }
     if (event.manual_override) {
-      overrides++;
+      manualOverrides++;
     }
   }
-
-  const total = filtered.length;
-
-  const feedbackStats = computeFollowupStats(days);
 
   return {
     days,
-    total,
-    low,
-    medium,
-    high,
-    savedTokens,
-    followupRate: feedbackStats.followup_rate,
-    manualOverrides: overrides,
+    total: filtered.length,
+    tierCounts,
+    direct,
+    delegated,
+    fallbacks,
+    manualOverrides,
+    followupRate: computeFollowupStats(days).followup_rate,
   };
-}
-
-function formatNumber(n: number): string {
-  if (n >= 1_000_000_000) {
-    return (n / 1_000_000_000).toFixed(1) + 'B';
-  }
-  if (n >= 1_000_000) {
-    return (n / 1_000_000).toFixed(1) + 'M';
-  }
-  if (n >= 1_000) {
-    return (n / 1_000).toFixed(1) + 'K';
-  }
-  return n.toString();
 }
 
 function pct(part: number, total: number): string {
@@ -83,21 +62,26 @@ function pad(str: string, width: number): string {
   return str.padStart(width);
 }
 
-export function printStats(days: number = 7): void {
+export function printStats(days: number = 7, config: RouterConfig = loadConfig()): void {
   const stats = computeStats(days);
   const plain = !!process.env.NO_COLOR || !process.stdout.isTTY;
-  const divider = plain ? '-'.repeat(41) : '─'.repeat(41);
+  const divider = plain ? '-'.repeat(58) : '─'.repeat(58);
+  const tierLines = TIERS.map((tier) => {
+    const execution = config.tiers[tier];
+    const target = execution.mode === 'direct' ? 'direct' : `delegate (${execution.model})`;
+    return `${tier.padEnd(8)} → ${target.padEnd(20)} ${pad(stats.tierCounts[tier].toString(), 5)}   (${pct(stats.tierCounts[tier], stats.total)})`;
+  });
 
   const lines = [
     `ClaudeRouter — last ${stats.days} days`,
     divider,
-    `Prompts routed:      ${pad(stats.total.toString(), 5)}`,
-    `LOW  → Haiku:        ${pad(stats.low.toString(), 5)}   (${pct(stats.low, stats.total)})`,
-    `MED  → Sonnet:       ${pad(stats.medium.toString(), 5)}   (${pct(stats.medium, stats.total)})`,
-    `HIGH → Opus:         ${pad(stats.high.toString(), 5)}   (${pct(stats.high, stats.total)})`,
-    `Estimated Opus saved:   ${formatNumber(stats.savedTokens)} tokens`,
-    `Follow-up rate (LOW):   ${(stats.followupRate * 100).toFixed(1)}%    ← lower is better`,
-    `Manual overrides:       ${stats.manualOverrides}`,
+    `Prompts routed:       ${pad(stats.total.toString(), 5)}`,
+    ...tierLines,
+    `Direct executions:    ${pad(stats.direct.toString(), 5)}`,
+    `Delegated executions: ${pad(stats.delegated.toString(), 5)}`,
+    `Classifier fallbacks: ${pad(stats.fallbacks.toString(), 5)}`,
+    `Manual overrides:     ${pad(stats.manualOverrides.toString(), 5)}`,
+    `Follow-up rate (TRIVIAL): ${(stats.followupRate * 100).toFixed(1)}%  ← lower is better`,
     divider,
   ];
 
@@ -106,4 +90,3 @@ export function printStats(days: number = 7): void {
   }
 }
 
-export { computeStats };

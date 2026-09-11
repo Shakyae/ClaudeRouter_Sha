@@ -1,114 +1,61 @@
-export type Tier = 'LOW' | 'MEDIUM' | 'HIGH';
+import type { Tier } from '../types';
 
-const CONFIRMATION_PATTERN =
-  /^(yes|no|y|n|ok|okay|sure|go ahead|do it|proceed|continue|confirmed|sounds good|looks good|lgtm)\.?$/i;
+const FOLLOW_UP_PATTERN =
+  /^(?:yes|no|y|n|ok|okay|sure|go ahead|do it|proceed|continue|confirmed|sounds good|looks good|lgtm|按这个方案继续|照刚才的做)[。.!！]?$/i;
 
-const LOW_PREFIX_PATTERNS = [
-  /^what does\b/i,
-  /^what is\b/i,
-  /^where is\b/i,
-  /^show me\b/i,
-  /^list\b/i,
-  /^print\b/i,
-  /^run\b/i,
-  /^execute\b/i,
+const TRIVIAL_PATTERNS = [
+  /^(?:find|search for|where is|locate)\b/i,
+  /^(?:list files?|show files?)\b/i,
+  /^(?:rename|fix (?:a )?typo|format)\b/i,
+  /^(?:explain|what does|what is)\b/i,
 ];
 
-const COMPLETION_PREFIXES = [/^✓/i, /^done\b/i, /^complete\b/i, /^finished\b/i];
-
-const HIGH_KEYWORD_PATTERNS = [
-  /\barchitect\b/i,
-  /\bredesign\b/i,
-  /\btradeoffs?\b/i,
-  /\bsecurity review\b/i,
-  /\bperformance review\b/i,
-  /\brefactor the entire\b/i,
-  /\bfrom scratch\b/i,
+const COMPLEX_PATTERNS = [
+  /\bcross[- ]module\b.*\b(?:race condition|deadlock|concurrency)\b/i,
+  /\b(?:race condition|deadlock)\b.*\bcross[- ]module\b/i,
 ];
 
-const CONTEXT_REF =
-  /\b(it|this|that|them|they|these|those|the \w+|we|our|my|your|above|below|previous|earlier|last|here)\b/i;
-
-const LOW_TOKEN_THRESHOLD = 4;
-const HIGH_TOKEN_THRESHOLD = 400;
-
-const MEDIUM_PREFIX_PATTERNS = [
-  /^add\b/i,
-  /^implement\b/i,
-  /^create\b/i,
-  /^build\b/i,
-  /^write\b/i,
-  /^design\b/i,
-  /^update\b/i,
-  /^modify\b/i,
-  /^develop\b/i,
-  /^refactor\b/i,
-  /^test\b/i,
-  /^debug\b/i,
+const EXTREME_PATTERNS = [
+  /\bredesign (?:the )?(?:entire|whole) (?:system|architecture)\b/i,
+  /\bsystem[- ]wide architecture\b/i,
+  /\b(?:entire|whole) (?:repository|codebase)\b.*\b(?:analysis|migration|refactor)\b/i,
+  /\bsecurity architecture\b/i,
 ];
-
-function tokenCount(prompt: string): number {
-  return prompt.trim().split(/\s+/).filter((t) => t.length > 0).length;
-}
 
 export function quickClassify(prompt: string): Tier | null {
   const trimmed = prompt.trim();
-  if (trimmed.length === 0) {
-    return 'LOW';
+  if (!trimmed) {
+    return 'STANDARD';
   }
 
-  const tokens = tokenCount(trimmed);
-
-  // Confirmations are context-dependent — they respond to something
-  // Claude said. Must be handled directly with full conversation context.
-  if (CONFIRMATION_PATTERN.test(trimmed)) {
-    return 'HIGH';
+  // Follow-ups rely on the main conversation and must stay with it.
+  if (FOLLOW_UP_PATTERN.test(trimmed)) {
+    return 'STANDARD';
   }
 
-  // HIGH: contains high-complexity keywords (check before token count)
-  for (const pattern of HIGH_KEYWORD_PATTERNS) {
+  for (const pattern of EXTREME_PATTERNS) {
     if (pattern.test(trimmed)) {
-      return 'HIGH';
+      return 'EXTREME';
     }
   }
 
-  // HIGH: longer than 400 tokens
-  if (tokens > HIGH_TOKEN_THRESHOLD) {
-    return 'HIGH';
-  }
-
-  // MEDIUM indicators: action verbs that suggest real work — skip LOW token count
-  for (const pattern of MEDIUM_PREFIX_PATTERNS) {
+  for (const pattern of COMPLEX_PATTERNS) {
     if (pattern.test(trimmed)) {
-      return null;
+      return 'COMPLEX';
     }
   }
 
-  // Guard against non-whitespace-separated languages (CJK, Thai, etc.)
-  // where tokenCount returns 1 for substantive prompts
-  if (tokens <= 1 && trimmed.length > 10) {
+  // Long prompts are not inherently difficult, so let the classifier decide.
+  if (trimmed.split(/\s+/).filter(Boolean).length > 100) {
     return null;
   }
 
-  // LOW: fewer than 4 tokens (after HIGH keyword and MEDIUM prefix checks)
-  if (tokens < LOW_TOKEN_THRESHOLD && !CONTEXT_REF.test(trimmed)) {
-    return 'LOW';
-  }
-
-  // LOW: starts with known low-complexity prefixes
-  for (const pattern of LOW_PREFIX_PATTERNS) {
-    if (pattern.test(trimmed) && !CONTEXT_REF.test(trimmed)) {
-      return 'LOW';
-    }
-  }
-
-  // LOW: completion prefixes
-  for (const pattern of COMPLETION_PREFIXES) {
+  for (const pattern of TRIVIAL_PATTERNS) {
     if (pattern.test(trimmed)) {
-      return 'LOW';
+      return 'TRIVIAL';
     }
   }
 
-  // Fall through to Haiku classification
+  // Ambiguous verbs and prompt length deliberately fall through to the classifier.
   return null;
 }

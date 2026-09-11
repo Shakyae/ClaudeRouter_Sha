@@ -1,94 +1,244 @@
-import * as fs from 'fs';
-import * as path from 'path';
+import fs from 'fs';
 import * as os from 'os';
+import path from 'path';
+import { TIERS, isTier, type ExecutionConfig, type Tier } from '../types';
 
 export interface RouterConfig {
-  tiers: {
-    LOW: string;
-    MEDIUM: string;
-    HIGH: string;
+  tiers: Record<Tier, ExecutionConfig>;
+  classifier: {
+    model: string;
+    timeout_ms: number;
   };
-  fallback: string;
+  fallback_tier: Tier;
   conservative: boolean;
-  override_keyword: string;
+  overrides: Record<string, Tier>;
+  debug: {
+    enabled: boolean;
+    prompt_preview_chars: number;
+  };
 }
 
-const DEFAULTS: RouterConfig = {
+export interface RouterConfigInput {
+  tiers?: Partial<Record<Tier, ExecutionConfig>>;
+  classifier?: Partial<RouterConfig['classifier']>;
+  fallback_tier?: Tier;
+  conservative?: boolean;
+  overrides?: Record<string, Tier>;
+  debug?: Partial<RouterConfig['debug']>;
+}
+
+export const DEFAULT_CONFIG: RouterConfig = {
   tiers: {
-    LOW: 'claude-haiku-4-5-20251001',
-    MEDIUM: 'claude-sonnet-4-6',
-    HIGH: 'claude-opus-4-6',
+    TRIVIAL: { mode: 'delegate', model: 'haiku' },
+    SIMPLE: { mode: 'delegate', model: 'sonnet' },
+    STANDARD: { mode: 'direct' },
+    COMPLEX: { mode: 'delegate', model: 'opus' },
+    EXTREME: { mode: 'delegate', model: 'fable' },
   },
-  fallback: 'claude-sonnet-4-6',
+  classifier: {
+    model: 'haiku',
+    timeout_ms: 3000,
+  },
+  fallback_tier: 'STANDARD',
   conservative: false,
-  override_keyword: '//opus',
+  overrides: {
+    '//trivial': 'TRIVIAL',
+    '//simple': 'SIMPLE',
+    '//standard': 'STANDARD',
+    '//complex': 'COMPLEX',
+    '//extreme': 'EXTREME',
+  },
+  debug: {
+    enabled: false,
+    prompt_preview_chars: 150,
+  },
 };
 
-function readJsonFile(filePath: string): Partial<RouterConfig> | null {
+type JsonRecord = Record<string, unknown>;
+
+function isRecord(value: unknown): value is JsonRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function warn(message: string): void {
   try {
-    const content = fs.readFileSync(filePath, 'utf-8');
-    return JSON.parse(content) as Partial<RouterConfig>;
+    process.stderr.write(`[claude-router] Warning: ${message}\n`);
   } catch {
-    return null;
+    // Configuration validation must never block routing.
   }
 }
 
-function deepMerge(base: RouterConfig, override: Partial<RouterConfig>): RouterConfig {
-  const result: RouterConfig = { ...base };
+function cloneConfig(config: RouterConfig): RouterConfig {
+  return {
+    tiers: { ...config.tiers },
+    classifier: { ...config.classifier },
+    fallback_tier: config.fallback_tier,
+    conservative: config.conservative,
+    overrides: { ...config.overrides },
+    debug: { ...config.debug },
+  };
+}
 
-  if (override.tiers) {
-    result.tiers = { ...base.tiers, ...override.tiers };
+function parseExecution(value: unknown, key: string): ExecutionConfig | null {
+  if (!isRecord(value)) {
+    warn(`${key} must be an object; ignoring it`);
+    return null;
   }
-  if (override.fallback !== undefined) {
-    result.fallback = override.fallback;
+
+  if (value.mode === 'direct') {
+    return { mode: 'direct' };
   }
-  if (override.conservative !== undefined) {
-    result.conservative = override.conservative;
+
+  if (value.mode === 'delegate' && typeof value.model === 'string' && value.model.trim()) {
+    return { mode: 'delegate', model: value.model.trim() };
   }
-  if (override.override_keyword !== undefined) {
-    result.override_keyword = override.override_keyword;
+
+  warn(`${key} must be { mode: "direct" } or { mode: "delegate", model: "..." }; ignoring it`);
+  return null;
+}
+
+function mergeTiers(result: RouterConfig, tiers: unknown): void {
+  if (!isRecord(tiers)) {
+    warn('tiers must be an object; ignoring it');
+    return;
+  }
+
+  for (const tier of TIERS) {
+    if (!(tier in tiers)) {
+      continue;
+    }
+
+    const execution = parseExecution(tiers[tier], `tiers.${tier}`);
+    if (execution) {
+      result.tiers[tier] = execution;
+    }
+  }
+
+  for (const key of Object.keys(tiers)) {
+    if (!isTier(key)) {
+      warn(`tiers.${key} is not a known tier; ignoring it`);
+    }
+  }
+}
+
+function mergeClassifier(result: RouterConfig, classifier: unknown): void {
+  if (!isRecord(classifier)) {
+    warn('classifier must be an object; ignoring it');
+    return;
+  }
+
+  if ('model' in classifier) {
+    if (typeof classifier.model === 'string' && classifier.model.trim()) {
+      result.classifier.model = classifier.model.trim();
+    } else {
+      warn('classifier.model must be a non-empty string; ignoring it');
+    }
+  }
+
+  if ('timeout_ms' in classifier) {
+    if (typeof classifier.timeout_ms === 'number' && Number.isFinite(classifier.timeout_ms) && classifier.timeout_ms >= 0) {
+      result.classifier.timeout_ms = classifier.timeout_ms;
+    } else {
+      warn('classifier.timeout_ms must be a non-negative finite number; ignoring it');
+    }
+  }
+}
+
+function mergeOverrides(result: RouterConfig, overrides: unknown): void {
+  if (!isRecord(overrides)) {
+    warn('overrides must be an object; ignoring it');
+    return;
+  }
+
+  for (const [prefix, tier] of Object.entries(overrides)) {
+    if (!prefix.trim() || !isTier(tier)) {
+      warn(`overrides.${prefix} must map to a known tier; ignoring it`);
+      continue;
+    }
+    result.overrides[prefix] = tier;
+  }
+}
+
+function mergeDebug(result: RouterConfig, debug: unknown): void {
+  if (!isRecord(debug)) {
+    warn('debug must be an object; ignoring it');
+    return;
+  }
+
+  if ('enabled' in debug) {
+    if (typeof debug.enabled === 'boolean') {
+      result.debug.enabled = debug.enabled;
+    } else {
+      warn('debug.enabled must be a boolean; ignoring it');
+    }
+  }
+
+  if ('prompt_preview_chars' in debug) {
+    if (typeof debug.prompt_preview_chars === 'number' && Number.isInteger(debug.prompt_preview_chars) && debug.prompt_preview_chars >= 0) {
+      result.debug.prompt_preview_chars = debug.prompt_preview_chars;
+    } else {
+      warn('debug.prompt_preview_chars must be a non-negative integer; ignoring it');
+    }
+  }
+}
+
+export function mergeConfig(base: RouterConfig, override: unknown): RouterConfig {
+  const result = cloneConfig(base);
+  if (!isRecord(override)) {
+    warn('configuration root must be an object; ignoring it');
+    return result;
+  }
+
+  if ('tiers' in override) {
+    mergeTiers(result, override.tiers);
+  }
+  if ('classifier' in override) {
+    mergeClassifier(result, override.classifier);
+  }
+  if ('fallback_tier' in override) {
+    if (isTier(override.fallback_tier)) {
+      result.fallback_tier = override.fallback_tier;
+    } else {
+      warn('fallback_tier must be a known tier; ignoring it');
+    }
+  }
+  if ('conservative' in override) {
+    if (typeof override.conservative === 'boolean') {
+      result.conservative = override.conservative;
+    } else {
+      warn('conservative must be a boolean; ignoring it');
+    }
+  }
+  if ('overrides' in override) {
+    mergeOverrides(result, override.overrides);
+  }
+  if ('debug' in override) {
+    mergeDebug(result, override.debug);
   }
 
   return result;
 }
 
+function readJsonFile(filePath: string): unknown | null {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
 export function loadConfig(cwd?: string): RouterConfig {
-  let config: RouterConfig = { ...DEFAULTS, tiers: { ...DEFAULTS.tiers } };
+  let config = cloneConfig(DEFAULT_CONFIG);
 
-  // Layer 1: ~/.claude-router.json
-  const globalPath = path.join(os.homedir(), '.claude-router.json');
-  const globalConfig = readJsonFile(globalPath);
-  if (globalConfig) {
-    config = deepMerge(config, globalConfig);
+  const globalConfig = readJsonFile(path.join(os.homedir(), '.claude-router.json'));
+  if (globalConfig !== null) {
+    config = mergeConfig(config, globalConfig);
   }
 
-  // Layer 2: .claude-router.json in CWD
-  const localPath = path.join(cwd ?? process.cwd(), '.claude-router.json');
-  const localConfig = readJsonFile(localPath);
-  if (localConfig) {
-    config = deepMerge(config, localConfig);
-  }
-
-  warnInvalidModels(config);
-
-  if (config.override_keyword.trim() === '') {
-    process.stderr.write(
-      `[claude-router] Warning: override_keyword is empty, resetting to default "${DEFAULTS.override_keyword}"\n`
-    );
-    config.override_keyword = DEFAULTS.override_keyword;
+  const projectConfig = readJsonFile(path.join(cwd ?? process.cwd(), '.claude-router.json'));
+  if (projectConfig !== null) {
+    config = mergeConfig(config, projectConfig);
   }
 
   return config;
-}
-
-const KNOWN_MODEL_PATTERN = /^claude-(haiku|sonnet|opus)-/;
-
-function warnInvalidModels(config: RouterConfig): void {
-  for (const [tier, model] of Object.entries(config.tiers)) {
-    if (!KNOWN_MODEL_PATTERN.test(model)) {
-      process.stderr.write(
-        `[claude-router] Warning: model "${model}" for tier ${tier} may be invalid\n`
-      );
-    }
-  }
 }
