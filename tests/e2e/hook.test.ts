@@ -68,12 +68,15 @@ describe('Node UserPromptSubmit hook', () => {
   });
 
   it('routes parsed JSON input through the Router API without shell interpolation', async () => {
+    const delegatedDecision = decision();
+    mockRoute.mockResolvedValueOnce(delegatedDecision);
+
     const output = await processHookInput({
       prompt: 'find the function',
       cwd: 'C:/workspace/project',
     });
 
-    expect(output).toContain('[ROUTER] Complexity: TRIVIAL');
+    expect(output).toBe(delegatedDecision.directive);
     expect(mockLoadConfig).toHaveBeenCalledWith('C:/workspace/project');
     expect(mockRoute).toHaveBeenCalledWith('find the function', config);
     expect(mockLogDecision).toHaveBeenCalledWith(expect.objectContaining({

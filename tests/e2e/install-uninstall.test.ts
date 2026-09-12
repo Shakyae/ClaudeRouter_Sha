@@ -89,10 +89,13 @@ describe('install/uninstall e2e', () => {
       });
     });
 
-    it('fresh install → ClaudeRouter section appears in CLAUDE.md', () => {
+    it('fresh install → ClaudeRouter section includes effective tier propagation', () => {
       handleInit([projectDir]);
       const content = fs.readFileSync(claudeMdPath(), 'utf-8');
       expect(content).toContain('ClaudeRouter Directives');
+      expect(content).toContain('[ROUTER] Complexity: <TIER>');
+      expect(content).toContain('task description or supported task metadata');
+      expect(content).toContain('<brief task summary> · <TIER>');
     });
 
     it('fresh install → marker comments present in CLAUDE.md', () => {

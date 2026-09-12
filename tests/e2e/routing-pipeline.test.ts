@@ -27,6 +27,7 @@ function validateShape(decision: RoutingDecision): void {
   expect(typeof decision.strippedPrompt).toBe('string');
 
   if (decision.execution.mode === 'delegate') {
+    expect(decision.directive).toContain(`Complexity: ${decision.tier}.`);
     expect(decision.directive).toContain(`model \"${decision.execution.model}\"`);
   } else {
     expect(decision.directive).toBeNull();
@@ -80,6 +81,7 @@ describe('routing pipeline e2e', () => {
       source: 'classifier',
       execution: { mode: 'delegate', model: 'sonnet' },
     });
+    expect(decision.directive).toContain('Complexity: SIMPLE.');
     expect(mockCreate).toHaveBeenCalledOnce();
   });
 
@@ -149,5 +151,6 @@ describe('routing pipeline e2e', () => {
       tier: 'COMPLEX',
       execution: { mode: 'delegate', model: 'opus' },
     });
+    expect(decision.directive).toContain('Complexity: COMPLEX.');
   });
 });

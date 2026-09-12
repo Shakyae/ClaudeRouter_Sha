@@ -47,6 +47,7 @@ describe('route', () => {
     expect(decision.tier).toBe(tier);
     expect(decision.execution).toEqual(execution);
     if (execution.mode === 'delegate') {
+      expect(decision.directive).toContain(`Complexity: ${tier}.`);
       expect(decision.directive).toContain(`model "${execution.model}"`);
     } else {
       expect(decision.directive).toBeNull();
@@ -75,6 +76,7 @@ describe('route', () => {
     const decision = await route('ordinary task', config);
 
     expect(decision.execution).toEqual({ mode: 'delegate', model: 'frontier-v2' });
+    expect(decision.directive).toContain('Complexity: EXTREME.');
     expect(decision.directive).toContain('model "frontier-v2"');
   });
 
@@ -91,6 +93,8 @@ describe('route', () => {
       execution: { mode: 'delegate', model: 'opus' },
       strippedPrompt: 'inspect the race condition',
     });
+    expect(decision.directive).toContain('Complexity: COMPLEX.');
+    expect(decision.directive).toContain('model "opus"');
     expect(mockClassify).not.toHaveBeenCalled();
   });
 
@@ -108,6 +112,10 @@ describe('route', () => {
 
     expect(decision.tier).toBe(outputTier);
     expect(decision.execution).toEqual(config.tiers[outputTier]);
+    if (decision.execution.mode === 'delegate') {
+      expect(decision.directive).toContain(`Complexity: ${outputTier}.`);
+      expect(decision.directive).toContain(`model "${decision.execution.model}"`);
+    }
   });
 
   it('retains a classifier fallback decision and resolves its configured execution', async () => {
@@ -136,9 +144,9 @@ describe('buildDirective', () => {
     expect(buildDirective('STANDARD', { mode: 'direct' })).toBeNull();
   });
 
-  it('only uses the configured delegate model', () => {
-    expect(buildDirective('COMPLEX', { mode: 'delegate', model: 'arbitrary-alias' })).toContain(
-      'model "arbitrary-alias"',
+  it('emits the effective tier and configured delegate model in a stable format', () => {
+    expect(buildDirective('COMPLEX', { mode: 'delegate', model: 'arbitrary-alias' })).toBe(
+      '[ROUTER] Complexity: COMPLEX. Delegate the entire task to a subagent using model "arbitrary-alias". Let the subagent inspect and modify the repository as needed. After it finishes, do not redo the implementation independently.',
     );
   });
 });
