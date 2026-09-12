@@ -87,12 +87,13 @@ When a `[ROUTER]` directive appears in your context at the start of a turn, it i
 ### When the directive says to delegate
 
 1. Delegate the entire task to a subagent using the exact model alias quoted in the directive. The alias is configuration-driven; do not replace it with a hardcoded model name.
-2. You have the full conversation history. Construct a Task prompt that includes:
+2. Extract the effective tier from `[ROUTER] Complexity: <TIER>`. When creating the subagent, include it in the task description or supported task metadata as `<brief task summary> · <TIER>` (for example, `检查计划模式触发 · SIMPLE`).
+3. You have the full conversation history. Construct a Task prompt that includes:
    - The user's original request verbatim
    - Directly relevant code, errors, signatures, and prior decisions
    - Enough context for a subagent with no conversation memory to complete the task
-3. If faithfully supplying the necessary context would exceed 500 tokens, handle the request directly instead. This preserves required context and is not a routing failure.
-4. Return the subagent's response verbatim. Do not add commentary, preamble, or postamble.
+4. If faithfully supplying the necessary context would exceed 500 tokens, handle the request directly instead. This preserves required context and is not a routing failure.
+5. Return the subagent's response verbatim. Do not add commentary, preamble, or postamble.
 
 ### Never delegate when
 

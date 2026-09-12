@@ -139,12 +139,80 @@ export function hashPrompt(prompt: string): string {
   return crypto.createHash('sha256').update(prompt).digest('hex').slice(0, 12);
 }
 
+const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+interface StoredEntry {
+  line: string;
+  ts: string;
+}
+
+function compareLatestFirst(a: { ts: string }, b: { ts: string }): number {
+  const aTime = Date.parse(a.ts);
+  const bTime = Date.parse(b.ts);
+  const aValid = !Number.isNaN(aTime);
+  const bValid = !Number.isNaN(bTime);
+
+  if (!aValid || !bValid) {
+    return aValid ? -1 : bValid ? 1 : 0;
+  }
+
+  return bTime - aTime;
+}
+
+function getStoredTimestamp(value: unknown): string | null {
+  if (!isRecord(value)) return null;
+
+  if (value.type === 'followup_marker') {
+    return typeof value.session_id === 'string' && typeof value.ts === 'string' ? value.ts : null;
+  }
+
+  return normalizeEvent(value)?.ts ?? null;
+}
+
+function readRetainedEntries(): StoredEntry[] {
+  try {
+    const eventsPath = getEventsPath();
+    if (!fs.existsSync(eventsPath)) return [];
+
+    const cutoff = Date.now() - RETENTION_MS;
+    const retained: StoredEntry[] = [];
+    const content = fs.readFileSync(eventsPath, 'utf-8');
+
+    for (const line of content.split('\n')) {
+      if (!line.trim()) continue;
+
+      try {
+        const parsed: unknown = JSON.parse(line);
+        const ts = getStoredTimestamp(parsed);
+        if (!ts) continue;
+
+        const timestamp = Date.parse(ts);
+        if (!Number.isNaN(timestamp) && timestamp < cutoff) continue;
+
+        retained.push({ line: JSON.stringify(parsed), ts });
+      } catch {
+        // Drop malformed JSONL entries while compacting.
+      }
+    }
+
+    return retained.sort(compareLatestFirst);
+  } catch {
+    return [];
+  }
+}
+
+function writeEntry(line: string, ts: string): void {
+  const entries = readRetainedEntries();
+  entries.push({ line, ts });
+  entries.sort(compareLatestFirst);
+  fs.writeFileSync(getEventsPath(), `${entries.map((entry) => entry.line).join('\n')}\n`, 'utf-8');
+}
+
 export function logDecision(event: Omit<RoutingEvent, 'had_followup'>): void {
   try {
     ensureDir();
     const full: RoutingEvent = { ...event, had_followup: false };
-    const line = JSON.stringify(full) + '\n';
-    fs.appendFileSync(getEventsPath(), line, 'utf-8');
+    writeEntry(JSON.stringify(full), full.ts);
   } catch {
     // Never throw — telemetry must not crash the hook
   }
@@ -153,8 +221,8 @@ export function logDecision(event: Omit<RoutingEvent, 'had_followup'>): void {
 export function markFollowup(session_id: string, ts: string): void {
   try {
     ensureDir();
-    const marker = JSON.stringify({ type: 'followup_marker', session_id, ts }) + '\n';
-    fs.appendFileSync(getEventsPath(), marker, 'utf-8');
+    const marker = JSON.stringify({ type: 'followup_marker', session_id, ts });
+    writeEntry(marker, ts);
   } catch {
     // Never throw
   }
@@ -195,7 +263,7 @@ export function readEvents(): RoutingEvent[] {
       }
     }
 
-    return events;
+    return events.sort(compareLatestFirst);
   } catch {
     return [];
   }
