@@ -1,6 +1,5 @@
 # ClaudeRouter_Sha
 
-[![npm version](https://img.shields.io/npm/v/@0dust/claude-router.svg)](https://www.npmjs.com/package/@0dust/claude-router)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **Configuration-driven prompt routing for Claude Code.** ClaudeRouter classifies a prompt into one of five complexity tiers, then either keeps the task with the main agent or emits a directive to delegate it using the model alias configured for that tier.
@@ -17,33 +16,51 @@ The hook is a compiled Node program. It does not require `bash`, `sh`, `jq`, `gr
 
 ## Installation
 
+This fork is installed directly from GitHub; it is not published as a separate npm package.
+
 ```bash
-npm install -g @0dust/claude-router
+npm install -g github:Shakyae/ClaudeRouter_Sha
 claude-router init
 ```
 
 ### From source
 
 ```bash
-git clone https://github.com/0dust/ClaudeRouter.git
-cd ClaudeRouter
+git clone https://github.com/Shakyae/ClaudeRouter_Sha.git
+cd ClaudeRouter_Sha
 npm install
 npm run build
 npm install -g .
 claude-router init
 ```
 
-`init` registers this absolute command in `~/.claude/settings.json`:
+`init` always registers this absolute command in `~/.claude/settings.json`:
 
 ```text
 node <absolute-package-path>/dist/hooks/user-prompt-submit.js
 ```
 
-It also appends the managed ClaudeRouter directive block to the target project's `CLAUDE.md`. To target another project:
+The optional path only determines which `CLAUDE.md` receives the managed ClaudeRouter runtime directive. Without a path, `claude-router init` targets the current project; to target another project:
 
 ```bash
 claude-router init /path/to/your/project
 ```
+
+### Enable ClaudeRouter for all projects
+
+To initialize ClaudeRouter at the user level, target the Claude configuration directory itself. On Windows PowerShell:
+
+```powershell
+claude-router init "$env:USERPROFILE\.claude"
+```
+
+On macOS/Linux:
+
+```bash
+claude-router init "$HOME/.claude"
+```
+
+The hook is still registered in `~/.claude/settings.json`; the argument only controls where the runtime directive is written. When the target is `~/.claude`, the user-level `CLAUDE.md` applies to all projects. A project's `.claude-router.json` overrides the user-level `~/.claude-router.json`.
 
 ## Verify installation
 
@@ -52,7 +69,7 @@ claude-router doctor
 claude-router stats
 ```
 
-`doctor` verifies Node, the compiled Node hook, hook registration, the `CLAUDE.md` marker, and packaged runtime files. If routing events accumulate, the hook is active.
+`doctor` verifies Node, the compiled Node hook, hook registration, the `CLAUDE.md` marker, and packaged runtime files. If routing events accumulate, the hook is active. After a user-level initialization, run `doctor` from `$env:USERPROFILE\.claude` (or inspect the user-level file); running it from a project directory can report a missing marker because it checks the current working directory's `CLAUDE.md`.
 
 ## How routing works
 
