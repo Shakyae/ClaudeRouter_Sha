@@ -8,9 +8,10 @@
     "claude-router": "./dist/cli/index.js"
   },
   "scripts": {
-    "build": "tsc && cp src/classifier/prompt.md dist/classifier/",
+    "build": "tsc && node scripts/copy-classifier-prompt.cjs",
     "test": "vitest run",
     "dev": "tsc --watch",
+    "prepare": "npm run build",
     "prepublishOnly": "npm run build && npm test"
   },
   "files": [
@@ -42,8 +43,8 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/0dust/ClaudeRouter.git"
+    "url": "https://github.com/Shakyae/ClaudeRouter_Sha.git"
   },
-  "homepage": "https://github.com/0dust/ClaudeRouter#readme",
+  "homepage": "https://github.com/Shakyae/ClaudeRouter_Sha#readme",
   "license": "MIT"
 }

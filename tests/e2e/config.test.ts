@@ -42,12 +42,11 @@ function writeConfig(directory: string, config: object): void {
 }
 
 describe('config loading', () => {
-  it('loads five independent default tier executions', () => {
+  it('loads four independent default tier executions', () => {
     const config = loadConfig(projectDir);
 
-    expect(config.tiers.TRIVIAL).toEqual({ mode: 'delegate', model: 'haiku' });
-    expect(config.tiers.SIMPLE).toEqual({ mode: 'delegate', model: 'sonnet' });
-    expect(config.tiers.STANDARD).toEqual({ mode: 'direct' });
+    expect(config.tiers.SIMPLE).toEqual({ mode: 'delegate', model: 'haiku' });
+    expect(config.tiers.STANDARD).toEqual({ mode: 'delegate', model: 'sonnet' });
     expect(config.tiers.COMPLEX).toEqual({ mode: 'delegate', model: 'opus' });
     expect(config.tiers.EXTREME).toEqual({ mode: 'delegate', model: 'fable' });
     expect(config.fallback_tier).toBe('STANDARD');
@@ -64,8 +63,8 @@ describe('config loading', () => {
     const config = loadConfig(projectDir);
 
     expect(config.tiers.EXTREME).toEqual({ mode: 'delegate', model: 'frontier-v2' });
-    expect(config.tiers.TRIVIAL).toEqual({ mode: 'delegate', model: 'haiku' });
-    expect(config.tiers.STANDARD).toEqual({ mode: 'direct' });
+    expect(config.tiers.SIMPLE).toEqual({ mode: 'delegate', model: 'haiku' });
+    expect(config.tiers.STANDARD).toEqual({ mode: 'delegate', model: 'sonnet' });
   });
 
   it('applies project configuration after global configuration', () => {
@@ -118,7 +117,7 @@ describe('config loading', () => {
       },
     });
 
-    expect(loadConfig(projectDir).tiers.STANDARD).toEqual({ mode: 'direct' });
+    expect(loadConfig(projectDir).tiers.STANDARD).toEqual({ mode: 'delegate', model: 'sonnet' });
   });
 
   it('ignores an invalid fallback tier', () => {
@@ -143,13 +142,71 @@ describe('config loading', () => {
     const config = loadConfig(projectDir);
 
     expect(config.overrides['//architect']).toBe('EXTREME');
-    expect(config.overrides['//trivial']).toBe('TRIVIAL');
+    expect(config.overrides['//trivial']).toBe('SIMPLE');
   });
 
   it('ignores malformed JSON and non-object configuration roots', () => {
     writeFileSync(path.join(homeDir, '.claude-router.json'), '{invalid', 'utf-8');
     writeFileSync(path.join(projectDir, '.claude-router.json'), '[]', 'utf-8');
 
-    expect(loadConfig(projectDir).tiers.STANDARD).toEqual({ mode: 'direct' });
+    expect(loadConfig(projectDir).tiers.STANDARD).toEqual({ mode: 'delegate', model: 'sonnet' });
+  });
+
+  it('migrates a legacy TRIVIAL tier key to SIMPLE without shifting other tier names', () => {
+    writeConfig(projectDir, {
+      tiers: {
+        TRIVIAL: { mode: 'delegate', model: 'legacy-fast' },
+      },
+    });
+
+    const config = loadConfig(projectDir);
+
+    expect(config.tiers.SIMPLE).toEqual({ mode: 'delegate', model: 'legacy-fast' });
+    expect(config.tiers.STANDARD).toEqual({ mode: 'delegate', model: 'sonnet' });
+    expect(config.tiers.COMPLEX).toEqual({ mode: 'delegate', model: 'opus' });
+    expect(config.tiers.EXTREME).toEqual({ mode: 'delegate', model: 'fable' });
+  });
+
+  it('lets an explicit new tier key override a migrated legacy tier entry', () => {
+    writeConfig(projectDir, {
+      tiers: {
+        TRIVIAL: { mode: 'delegate', model: 'legacy-fast' },
+        SIMPLE: { mode: 'delegate', model: 'fresh-simple' },
+      },
+    });
+
+    expect(loadConfig(projectDir).tiers.SIMPLE).toEqual({ mode: 'delegate', model: 'fresh-simple' });
+  });
+
+  it('migrates legacy TRIVIAL in fallback_tier and overrides to SIMPLE', () => {
+    writeConfig(projectDir, {
+      fallback_tier: 'TRIVIAL',
+      overrides: {
+        '//quick': 'TRIVIAL',
+      },
+    });
+
+    const config = loadConfig(projectDir);
+
+    expect(config.fallback_tier).toBe('SIMPLE');
+    expect(config.overrides['//quick']).toBe('SIMPLE');
+  });
+
+  it('treats SIMPLE/STANDARD/COMPLEX/EXTREME keys under the current four-tier semantics', () => {
+    writeConfig(projectDir, {
+      tiers: {
+        SIMPLE: { mode: 'direct' },
+        STANDARD: { mode: 'delegate', model: 'new-standard' },
+        COMPLEX: { mode: 'delegate', model: 'new-complex' },
+        EXTREME: { mode: 'direct' },
+      },
+    });
+
+    const config = loadConfig(projectDir);
+
+    expect(config.tiers.SIMPLE).toEqual({ mode: 'direct' });
+    expect(config.tiers.STANDARD).toEqual({ mode: 'delegate', model: 'new-standard' });
+    expect(config.tiers.COMPLEX).toEqual({ mode: 'delegate', model: 'new-complex' });
+    expect(config.tiers.EXTREME).toEqual({ mode: 'direct' });
   });
 });

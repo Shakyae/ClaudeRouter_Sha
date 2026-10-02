@@ -1,15 +1,15 @@
 # ClaudeRouter Pre-Publication Audit Status
 
 > Historical note: this document previously contained a pre-publication fix queue for
-> the original three-tier implementation. The items below are retained as a concise
-> completion record; the old Bash, `jq`, and three-tier instructions are obsolete.
+> the original three-tier implementation, then a five-tier follow-up. The items below are retained as a concise
+> completion record; the old Bash, `jq`, three-tier, and five-tier instructions are obsolete.
 
 ## Current release contract
 
-ClaudeRouter uses five shared tiers:
+ClaudeRouter uses four shared tiers:
 
 ```text
-TRIVIAL | SIMPLE | STANDARD | COMPLEX | EXTREME
+SIMPLE | STANDARD | COMPLEX | EXTREME
 ```
 
 A tier determines no intrinsic model. `config.tiers[tier]` selects either:
@@ -33,7 +33,7 @@ mapping only from the Provider or Gateway request log's `model` field.
   legacy Bash hook.
 - The CLI provides `--version` and `doctor` commands.
 - README, CONTRIBUTING, plugin metadata, and the issue template describe the
-  five-tier, configuration-driven behavior.
+  four-tier, configuration-driven behavior.
 
 ## Hook and installation contract
 

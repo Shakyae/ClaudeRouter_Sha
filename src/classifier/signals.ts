@@ -52,7 +52,7 @@ export function quickClassify(prompt: string): Tier | null {
 
   for (const pattern of TRIVIAL_PATTERNS) {
     if (pattern.test(trimmed)) {
-      return 'TRIVIAL';
+      return 'SIMPLE';
     }
   }
 

@@ -43,26 +43,26 @@ describe('routing pipeline e2e', () => {
     });
   });
 
-  it('uses high-confidence TRIVIAL signals without calling the classifier', async () => {
+  it('uses high-confidence SIMPLE signals without calling the classifier', async () => {
     const decision = await route('find calculatePrice', defaultConfig);
 
     validateShape(decision);
     expect(decision).toMatchObject({
-      tier: 'TRIVIAL',
+      tier: 'SIMPLE',
       source: 'signal',
       execution: { mode: 'delegate', model: 'haiku' },
     });
     expect(mockCreate).not.toHaveBeenCalled();
   });
 
-  it('keeps follow-up prompts direct at STANDARD without calling the classifier', async () => {
+  it('keeps follow-up prompts at STANDARD without calling the classifier', async () => {
     const decision = await route('continue', defaultConfig);
 
     validateShape(decision);
     expect(decision).toMatchObject({
       tier: 'STANDARD',
       source: 'signal',
-      execution: { mode: 'direct' },
+      execution: { mode: 'delegate', model: 'sonnet' },
     });
     expect(mockCreate).not.toHaveBeenCalled();
   });
@@ -79,16 +79,15 @@ describe('routing pipeline e2e', () => {
     expect(decision).toMatchObject({
       tier: 'SIMPLE',
       source: 'classifier',
-      execution: { mode: 'delegate', model: 'sonnet' },
+      execution: { mode: 'delegate', model: 'haiku' },
     });
     expect(decision.directive).toContain('Complexity: SIMPLE.');
     expect(mockCreate).toHaveBeenCalledOnce();
   });
 
   it.each([
-    ['TRIVIAL', { mode: 'delegate', model: 'haiku' }],
-    ['SIMPLE', { mode: 'delegate', model: 'sonnet' }],
-    ['STANDARD', { mode: 'direct' }],
+    ['SIMPLE', { mode: 'delegate', model: 'haiku' }],
+    ['STANDARD', { mode: 'delegate', model: 'sonnet' }],
     ['COMPLEX', { mode: 'delegate', model: 'opus' }],
     ['EXTREME', { mode: 'delegate', model: 'fable' }],
   ] as const)('routes classifier result %s through its configured execution', async (tier, execution) => {
@@ -117,7 +116,7 @@ describe('routing pipeline e2e', () => {
     expect(decision).toMatchObject({
       tier: 'STANDARD',
       source: 'fallback',
-      execution: { mode: 'direct' },
+      execution: { mode: 'delegate', model: 'sonnet' },
     });
   });
 

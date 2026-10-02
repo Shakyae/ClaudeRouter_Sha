@@ -1,5 +1,4 @@
 export const TIERS = [
-  'TRIVIAL',
   'SIMPLE',
   'STANDARD',
   'COMPLEX',

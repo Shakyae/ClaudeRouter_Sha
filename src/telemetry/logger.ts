@@ -21,7 +21,8 @@ export interface RoutingEvent {
 
 
 const LEGACY_TIER_MAP: Record<string, Tier> = {
-  LOW: 'TRIVIAL',
+  TRIVIAL: 'SIMPLE',
+  LOW: 'SIMPLE',
   MEDIUM: 'STANDARD',
   HIGH: 'COMPLEX',
 };

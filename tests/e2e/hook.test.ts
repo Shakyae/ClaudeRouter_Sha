@@ -32,9 +32,8 @@ import { processHookInput } from '../../src/hooks/user-prompt-submit';
 
 const config: RouterConfig = {
   tiers: {
-    TRIVIAL: { mode: 'delegate', model: 'haiku' },
-    SIMPLE: { mode: 'delegate', model: 'sonnet' },
-    STANDARD: { mode: 'direct' },
+    SIMPLE: { mode: 'delegate', model: 'haiku' },
+    STANDARD: { mode: 'delegate', model: 'sonnet' },
     COMPLEX: { mode: 'delegate', model: 'opus' },
     EXTREME: { mode: 'delegate', model: 'fable' },
   },
@@ -47,10 +46,10 @@ const config: RouterConfig = {
 
 function decision(overrides: Partial<RoutingDecision> = {}): RoutingDecision {
   return {
-    tier: 'TRIVIAL',
+    tier: 'SIMPLE',
     source: 'signal',
     execution: { mode: 'delegate', model: 'haiku' },
-    directive: '[ROUTER] Complexity: TRIVIAL. Delegate the entire task to a subagent using model "haiku".',
+    directive: '[ROUTER] Complexity: SIMPLE. Delegate the entire task to a subagent using model "haiku".',
     latencyMs: 12,
     strippedPrompt: 'find the function',
     ...overrides,
@@ -80,7 +79,7 @@ describe('Node UserPromptSubmit hook', () => {
     expect(mockLoadConfig).toHaveBeenCalledWith('C:/workspace/project');
     expect(mockRoute).toHaveBeenCalledWith('find the function', config);
     expect(mockLogDecision).toHaveBeenCalledWith(expect.objectContaining({
-      tier: 'TRIVIAL',
+      tier: 'SIMPLE',
       execution_mode: 'delegate',
       configured_model: 'haiku',
       latency_ms: 12,

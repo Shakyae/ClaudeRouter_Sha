@@ -31,20 +31,19 @@ describe('SDK router instance', () => {
     mockRoute.mockReset();
   });
 
-  it('returns five-tier session statistics without telemetry side effects', async () => {
+  it('returns four-tier session statistics without telemetry side effects', async () => {
     mockRoute.mockResolvedValue(decision('STANDARD'));
     const router = createRouter({ telemetry: false });
 
-    for (const tier of ['TRIVIAL', 'SIMPLE', 'STANDARD', 'COMPLEX', 'EXTREME'] as const) {
+    for (const tier of ['SIMPLE', 'STANDARD', 'COMPLEX', 'EXTREME'] as const) {
       mockRoute.mockResolvedValueOnce(decision(tier, tier === 'EXTREME' ? 'override' : 'classifier'));
       await router.route(`prompt for ${tier}`);
     }
 
     const stats = router.stats();
     expect(stats).toEqual({
-      total: 5,
+      total: 4,
       tiers: {
-        TRIVIAL: 1,
         SIMPLE: 1,
         STANDARD: 1,
         COMPLEX: 1,
@@ -54,7 +53,7 @@ describe('SDK router instance', () => {
       avg_latency_ms: 10,
     });
 
-    stats.tiers.TRIVIAL = 99;
-    expect(router.stats().tiers.TRIVIAL).toBe(1);
+    stats.tiers.SIMPLE = 99;
+    expect(router.stats().tiers.SIMPLE).toBe(1);
   });
 });

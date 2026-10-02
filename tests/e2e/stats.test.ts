@@ -73,9 +73,9 @@ function daysAgo(n: number): string {
 }
 
 describe('stats e2e', () => {
-  it('counts every five-tier execution and routing outcome', () => {
+  it('counts every four-tier execution and routing outcome', () => {
     writeEvents([
-      makeEventLine({ tier: 'TRIVIAL', execution_mode: 'delegate', configured_model: 'haiku' }),
+      makeEventLine({ tier: 'SIMPLE', execution_mode: 'delegate', configured_model: 'haiku' }),
       makeEventLine({ tier: 'SIMPLE', execution_mode: 'delegate', configured_model: 'sonnet' }),
       makeEventLine({ tier: 'STANDARD', execution_mode: 'direct' }),
       makeEventLine({ tier: 'COMPLEX', execution_mode: 'delegate', configured_model: 'opus', source: 'override', manual_override: true }),
@@ -85,8 +85,7 @@ describe('stats e2e', () => {
     expect(computeStats(7)).toMatchObject({
       total: 5,
       tierCounts: {
-        TRIVIAL: 1,
-        SIMPLE: 1,
+        SIMPLE: 2,
         STANDARD: 1,
         COMPLEX: 1,
         EXTREME: 1,
@@ -98,7 +97,7 @@ describe('stats e2e', () => {
     });
   });
 
-  it('normalizes legacy telemetry into the documented five-tier mapping', () => {
+  it('normalizes legacy telemetry into the documented four-tier mapping', () => {
     writeEvents([
       makeEventLine({ tier: 'LOW', model: 'legacy-low', execution_mode: undefined, source: 'haiku' }),
       makeEventLine({ tier: 'MEDIUM', model: 'legacy-medium', execution_mode: undefined, source: 'haiku' }),
@@ -107,8 +106,7 @@ describe('stats e2e', () => {
 
     const stats = computeStats(7);
     expect(stats.tierCounts).toEqual({
-      TRIVIAL: 1,
-      SIMPLE: 0,
+      SIMPLE: 1,
       STANDARD: 1,
       COMPLEX: 1,
       EXTREME: 0,
@@ -116,13 +114,13 @@ describe('stats e2e', () => {
     expect(stats.delegated).toBe(3);
   });
 
-  it('calculates the follow-up rate from TRIVIAL events', () => {
+  it('calculates the follow-up rate from SIMPLE events', () => {
     const sessionId = 'follow-up';
     const ts = daysAgo(1);
     const nextTs = new Date(new Date(ts).getTime() + 1_000).toISOString();
     writeEvents([
-      makeEventLine({ tier: 'TRIVIAL', execution_mode: 'delegate', session_id: sessionId, ts }),
-      makeEventLine({ tier: 'TRIVIAL', execution_mode: 'delegate', session_id: sessionId, ts: nextTs }),
+      makeEventLine({ tier: 'SIMPLE', execution_mode: 'delegate', session_id: sessionId, ts }),
+      makeEventLine({ tier: 'SIMPLE', execution_mode: 'delegate', session_id: sessionId, ts: nextTs }),
       JSON.stringify({ type: 'followup_marker', session_id: sessionId, ts }),
     ]);
 
@@ -157,7 +155,7 @@ describe('stats e2e', () => {
     expect(output).toContain('STANDARD');
     expect(output).toContain('direct');
     expect(output).toContain('Classifier fallbacks:');
-    expect(output).toContain('Follow-up rate (TRIVIAL)');
+    expect(output).toContain('Follow-up rate (SIMPLE)');
     expect(output).not.toContain('Estimated Opus saved');
   });
 
@@ -165,7 +163,6 @@ describe('stats e2e', () => {
     const stats = computeStats(7);
     expect(stats.total).toBe(0);
     expect(stats.tierCounts).toEqual({
-      TRIVIAL: 0,
       SIMPLE: 0,
       STANDARD: 0,
       COMPLEX: 0,

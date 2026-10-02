@@ -64,7 +64,7 @@ This loads the plugin for that session only.
 
 ```text
 src/
-  types.ts            # shared five-tier domain types and routing decision
+  types.ts            # shared four-tier domain types and routing decision
   classifier/
     signals.ts         # synchronous high-confidence heuristics
     classifier.ts      # full classify(): signals, classifier, then fallback
@@ -72,7 +72,7 @@ src/
   router/
     router.ts          # route(): override, classify, execution-aware directive
     model-map.ts       # conservative tier shift and configured execution lookup
-    config.ts          # schema-aware defaults → global → project config merge
+    config.ts          # schema-aware defaults → global → project config merge (incl. TRIVIAL→SIMPLE migration)
   hooks/
     user-prompt-submit.ts # cross-platform Claude Code Node hook
   cli/
@@ -85,7 +85,7 @@ src/
     index.ts            # public re-exports
   telemetry/
     logger.ts           # events.jsonl writer and legacy normalization
-    feedback.ts         # TRIVIAL follow-up-rate tracking
+    feedback.ts         # SIMPLE follow-up-rate tracking
 hooks/
   hooks.json            # plugin hook registration
 runtime-claude.md       # installed mandatory routing directive block
@@ -93,15 +93,15 @@ runtime-claude.md       # installed mandatory routing directive block
   plugin.json           # plugin metadata
 ```
 
-## Five-tier contract
+## Four-tier contract
 
 All routing consumers use the shared `Tier` from `src/types.ts`:
 
 ```ts
-TRIVIAL | SIMPLE | STANDARD | COMPLEX | EXTREME
+SIMPLE | STANDARD | COMPLEX | EXTREME
 ```
 
-Do not reintroduce legacy `LOW`, `MEDIUM`, or `HIGH` types. They may appear only in telemetry migration code and compatibility tests.
+Do not reintroduce `TRIVIAL`. It may appear only in `LEGACY_CONFIG_TIER_MAP` (`src/router/config.ts`) as the migration target for users who still have a `TRIVIAL` key in their `.claude-router.json`. Likewise, do not reintroduce `LOW`, `MEDIUM`, or `HIGH` types. They may appear only in telemetry migration code and compatibility tests.
 
 `ExecutionConfig` is separate from `Tier`:
 
@@ -124,7 +124,7 @@ All fast-path heuristics are in `src/classifier/signals.ts`. `quickClassify()` r
 
 ## Changing the classifier prompt
 
-Edit `src/classifier/prompt.md`. The template must contain `{{PROMPT}}`. It instructs the classifier to return exactly one of the five tier names. `parseTier()` accepts limited response variation, but the prompt should remain tightly constrained.
+Edit `src/classifier/prompt.md`. The template must contain `{{PROMPT}}`. It instructs the classifier to return exactly one of the four tier names. `parseTier()` accepts limited response variation, but the prompt should remain tightly constrained.
 
 ## Configuration schema
 

@@ -45,7 +45,6 @@ function loadPromptTemplate(): string {
 
   cachedTemplate = `You are a task complexity classifier for an AI coding assistant.
 Output exactly one word and nothing else:
-TRIVIAL
 SIMPLE
 STANDARD
 COMPLEX

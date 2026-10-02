@@ -34,9 +34,8 @@ function classifyAs(tier: Tier): void {
 
 describe('route', () => {
   it.each([
-    ['TRIVIAL', { mode: 'delegate', model: 'haiku' }],
-    ['SIMPLE', { mode: 'delegate', model: 'sonnet' }],
-    ['STANDARD', { mode: 'direct' }],
+    ['SIMPLE', { mode: 'delegate', model: 'haiku' }],
+    ['STANDARD', { mode: 'delegate', model: 'sonnet' }],
     ['COMPLEX', { mode: 'delegate', model: 'opus' }],
     ['EXTREME', { mode: 'delegate', model: 'fable' }],
   ] as const)('resolves %s through its configured execution', async (tier, execution) => {
@@ -54,7 +53,7 @@ describe('route', () => {
     }
   });
 
-  it.each(['TRIVIAL', 'SIMPLE', 'STANDARD', 'COMPLEX', 'EXTREME'] as const)(
+  it.each(['SIMPLE', 'STANDARD', 'COMPLEX', 'EXTREME'] as const)(
     'allows %s to be configured for direct execution',
     async (tier) => {
       classifyAs(tier);
@@ -99,7 +98,7 @@ describe('route', () => {
   });
 
   it.each([
-    ['TRIVIAL', 'SIMPLE'],
+    ['SIMPLE', 'STANDARD'],
     ['SIMPLE', 'STANDARD'],
     ['STANDARD', 'COMPLEX'],
     ['COMPLEX', 'EXTREME'],
@@ -133,7 +132,7 @@ describe('route', () => {
     expect(decision).toMatchObject({
       tier: 'STANDARD',
       source: 'fallback',
-      execution: { mode: 'direct' },
+      execution: { mode: 'delegate', model: 'sonnet' },
       classifierFailure: 'http_400',
     });
   });

@@ -6,7 +6,7 @@
   "plugins": [
     {
       "name": "claude-router",
-      "description": "Configuration-driven five-tier prompt routing for Claude Code.",
+      "description": "Configuration-driven four-tier prompt routing for Claude Code.",
       "source": "./",
       "category": "productivity"
     }

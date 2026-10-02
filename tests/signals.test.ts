@@ -3,12 +3,12 @@ import { quickClassify } from '../src/classifier/signals';
 
 describe('quickClassify', () => {
   it.each([
-    ['find calculatePrice', 'TRIVIAL'],
-    ['where is the router defined', 'TRIVIAL'],
-    ['list files in src', 'TRIVIAL'],
-    ['fix typo', 'TRIVIAL'],
-    ['rename the variable', 'TRIVIAL'],
-    ['format this file', 'TRIVIAL'],
+    ['find calculatePrice', 'SIMPLE'],
+    ['where is the router defined', 'SIMPLE'],
+    ['list files in src', 'SIMPLE'],
+    ['fix typo', 'SIMPLE'],
+    ['rename the variable', 'SIMPLE'],
+    ['format this file', 'SIMPLE'],
   ] as const)('classifies %s as %s', (prompt, tier) => {
     expect(quickClassify(prompt)).toBe(tier);
   });

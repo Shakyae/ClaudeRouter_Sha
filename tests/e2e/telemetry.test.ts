@@ -191,7 +191,7 @@ describe('telemetry e2e', () => {
 
     expect(readEvents()).toEqual([
       expect.objectContaining({
-        tier: 'TRIVIAL',
+        tier: 'SIMPLE',
         execution_mode: 'delegate',
         source: 'classifier',
       }),

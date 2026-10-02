@@ -29,9 +29,8 @@ export interface RouterConfigInput {
 
 export const DEFAULT_CONFIG: RouterConfig = {
   tiers: {
-    TRIVIAL: { mode: 'delegate', model: 'haiku' },
-    SIMPLE: { mode: 'delegate', model: 'sonnet' },
-    STANDARD: { mode: 'direct' },
+    SIMPLE: { mode: 'delegate', model: 'haiku' },
+    STANDARD: { mode: 'delegate', model: 'sonnet' },
     COMPLEX: { mode: 'delegate', model: 'opus' },
     EXTREME: { mode: 'delegate', model: 'fable' },
   },
@@ -42,7 +41,7 @@ export const DEFAULT_CONFIG: RouterConfig = {
   fallback_tier: 'STANDARD',
   conservative: false,
   overrides: {
-    '//trivial': 'TRIVIAL',
+    '//trivial': 'SIMPLE',
     '//simple': 'SIMPLE',
     '//standard': 'STANDARD',
     '//complex': 'COMPLEX',
@@ -97,27 +96,55 @@ function parseExecution(value: unknown, key: string): ExecutionConfig | null {
   return null;
 }
 
+// Only `TRIVIAL` from the removed five-tier model needs explicit migration.
+// `SIMPLE`, `STANDARD`, `COMPLEX`, and `EXTREME` were retained with the same
+// spelling, so they are no longer "legacy" — they are interpreted under the
+// current four-tier semantics. Shifting them (the previous behavior) created
+// silent tier renames for users who relied on the old defaults.
+const LEGACY_CONFIG_TIER_MAP: Record<string, Tier> = {
+  TRIVIAL: 'SIMPLE',
+};
+
+function normalizeConfiguredTier(value: unknown, key: string): Tier | null {
+  if (isTier(value)) {
+    return value;
+  }
+  if (typeof value === 'string' && value in LEGACY_CONFIG_TIER_MAP) {
+    warn(`${key} uses legacy tier ${value}; migrated to ${LEGACY_CONFIG_TIER_MAP[value]}. Update your configuration.`);
+    return LEGACY_CONFIG_TIER_MAP[value];
+  }
+  return null;
+}
+
 function mergeTiers(result: RouterConfig, tiers: unknown): void {
   if (!isRecord(tiers)) {
     warn('tiers must be an object; ignoring it');
     return;
   }
 
-  for (const tier of TIERS) {
-    if (!(tier in tiers)) {
+  const migrated: Array<[Tier, unknown]> = [];
+  for (const [key, value] of Object.entries(tiers)) {
+    if (isTier(key)) {
       continue;
     }
-
-    const execution = parseExecution(tiers[tier], `tiers.${tier}`);
-    if (execution) {
-      result.tiers[tier] = execution;
+    if (key in LEGACY_CONFIG_TIER_MAP) {
+      const target = LEGACY_CONFIG_TIER_MAP[key];
+      warn(`tiers.${key} is a legacy tier; migrated to tiers.${target}. Update your configuration.`);
+      migrated.push([target, value]);
+    } else {
+      warn(`tiers.${key} is not a known tier; ignoring it`);
     }
   }
 
-  for (const key of Object.keys(tiers)) {
-    if (!isTier(key)) {
-      warn(`tiers.${key} is not a known tier; ignoring it`);
-    }
+  // Apply legacy keys first so an explicit new tier key always takes precedence.
+  for (const [tier, value] of migrated) {
+    const execution = parseExecution(value, `tiers.${tier}`);
+    if (execution) result.tiers[tier] = execution;
+  }
+  for (const tier of TIERS) {
+    if (!(tier in tiers)) continue;
+    const execution = parseExecution(tiers[tier], `tiers.${tier}`);
+    if (execution) result.tiers[tier] = execution;
   }
 }
 
@@ -150,8 +177,13 @@ function mergeOverrides(result: RouterConfig, overrides: unknown): void {
     return;
   }
 
-  for (const [prefix, tier] of Object.entries(overrides)) {
-    if (!prefix.trim() || !isTier(tier)) {
+  for (const [prefix, rawTier] of Object.entries(overrides)) {
+    if (!prefix.trim()) {
+      warn(`overrides.${prefix} must map to a known tier; ignoring it`);
+      continue;
+    }
+    const tier = normalizeConfiguredTier(rawTier, `overrides.${prefix}`);
+    if (!tier) {
       warn(`overrides.${prefix} must map to a known tier; ignoring it`);
       continue;
     }
@@ -196,8 +228,9 @@ export function mergeConfig(base: RouterConfig, override: unknown): RouterConfig
     mergeClassifier(result, override.classifier);
   }
   if ('fallback_tier' in override) {
-    if (isTier(override.fallback_tier)) {
-      result.fallback_tier = override.fallback_tier;
+    const tier = normalizeConfiguredTier(override.fallback_tier, 'fallback_tier');
+    if (tier) {
+      result.fallback_tier = tier;
     } else {
       warn('fallback_tier must be a known tier; ignoring it');
     }

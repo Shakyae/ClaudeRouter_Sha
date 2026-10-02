@@ -81,7 +81,7 @@ export function printStats(days: number = 7, config: RouterConfig = loadConfig()
     `Delegated executions: ${pad(stats.delegated.toString(), 5)}`,
     `Classifier fallbacks: ${pad(stats.fallbacks.toString(), 5)}`,
     `Manual overrides:     ${pad(stats.manualOverrides.toString(), 5)}`,
-    `Follow-up rate (TRIVIAL): ${(stats.followupRate * 100).toFixed(1)}%  ← lower is better`,
+    `Follow-up rate (SIMPLE): ${(stats.followupRate * 100).toFixed(1)}%  ← lower is better`,
     divider,
   ];
 

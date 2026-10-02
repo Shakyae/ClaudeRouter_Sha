@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-ClaudeRouter is a configuration-driven five-tier prompt router for Claude Code. It classifies prompts as `TRIVIAL`, `SIMPLE`, `STANDARD`, `COMPLEX`, or `EXTREME`, then resolves `direct` or `delegate` execution from configuration. It ships as a Claude Code plugin and standalone SDK; configured aliases are not proof of the final Provider model.
+ClaudeRouter is a configuration-driven four-tier prompt router for Claude Code. It classifies prompts as `SIMPLE`, `STANDARD`, `COMPLEX`, or `EXTREME`, then resolves `direct` or `delegate` execution from configuration. It ships as a Claude Code plugin and standalone SDK; configured aliases are not proof of the final Provider model.
 
 All source code lives at the repository root. The `ClaudeRouter_PRD.txt` / `.docx` are product requirements docs.
 
@@ -37,7 +37,7 @@ No separate lint script exists. TypeScript strict mode is enforced via `tsconfig
 
 ### Classification Pipeline (3 stages)
 
-1. **Synchronous heuristics** (`src/classifier/signals.ts` → `quickClassify`) — high-confidence pattern matching. Returns a five-tier `Tier` or `null`; prompt length alone must not escalate complexity.
+1. **Synchronous heuristics** (`src/classifier/signals.ts` → `quickClassify`) — high-confidence pattern matching. Returns a four-tier `Tier` or `null`; prompt length alone must not escalate complexity.
 2. **Configured classifier call** (`src/classifier/classifier.ts` → `classify`) — if heuristics return `null`, sends the prompt to `classifier.model` with the template from `src/classifier/prompt.md`. It parses one tier and uses `fallback_tier` on any error.
 3. **Execution resolution** (`src/router/model-map.ts` → `resolveExecution`) — applies the configured conservative tier shift, then reads `direct` or `delegate` execution from `config.tiers`.
 
@@ -73,7 +73,7 @@ Hardcoded defaults → `~/.claude-router.json` → `./.claude-router.json` (CWD)
 - Telemetry and hook code must never throw — always wrap in try/catch with silent fallback
 - Classification fallback is always the configured `fallback_tier` (default `STANDARD`)
 - The `is_subagent` guard in the Node hook prevents infinite classification loops
-- Tier type is `'TRIVIAL' | 'SIMPLE' | 'STANDARD' | 'COMPLEX' | 'EXTREME'`; source type is `'signal' | 'classifier' | 'fallback' | 'override'`
+- Tier type is `'SIMPLE' | 'STANDARD' | 'COMPLEX' | 'EXTREME'`; source type is `'signal' | 'classifier' | 'fallback' | 'override'`
 - `ExecutionConfig` is either `{ mode: 'direct' }` or `{ mode: 'delegate', model: string }`; configured model strings are aliases, not verified Provider models
 - The classifier resolves `haiku` against the Hook's `ANTHROPIC_DEFAULT_HAIKU_MODEL` at request time; do not persist machine-specific Provider model IDs from `init` into project configuration
 - Tests mock the Anthropic SDK — no real API calls in test suite

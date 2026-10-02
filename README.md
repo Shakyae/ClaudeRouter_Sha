@@ -1,8 +1,10 @@
 # ClaudeRouter_Sha
 
+[简体中文](README.zh-CN.md)
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**Configuration-driven prompt routing for Claude Code.** ClaudeRouter classifies a prompt into one of five complexity tiers, then either keeps the task with the main agent or emits a directive to delegate it using the model alias configured for that tier.
+**Configuration-driven prompt routing for Claude Code.** ClaudeRouter classifies a prompt into one of four complexity tiers, then either keeps the task with the main agent or emits a directive to delegate it using the model alias configured for that tier.
 
 ClaudeRouter deliberately does **not** decide or verify the final Provider model. Aliases such as `haiku`, `sonnet`, `opus`, and `fable` are configuration values only; their resolution is owned by Claude Code and any configured Provider or Gateway.
 
@@ -40,11 +42,13 @@ claude-router init
 node <absolute-package-path>/dist/hooks/user-prompt-submit.js
 ```
 
-The optional path only determines which `CLAUDE.md` receives the managed ClaudeRouter runtime directive. Without a path, `claude-router init` targets the current project; to target another project:
+The optional path only determines which `CLAUDE.md` receives the managed ClaudeRouter runtime directive. The target directory must already exist; `init` does not create it. Without a path, `claude-router init` targets the current project; to target another project:
 
 ```bash
 claude-router init /path/to/your/project
 ```
+
+`init` registers or updates the hook in `~/.claude/settings.json` first, then writes the managed directive to the target `CLAUDE.md`. If the target directory does not exist or the `CLAUDE.md` write fails, the command reports an error but the hook registration has already succeeded and remains in place. Create the target directory before running `init`; if needed, fix the write problem and run `init` again.
 
 ### Enable ClaudeRouter for all projects
 
@@ -78,13 +82,12 @@ claude-router stats
 3. **Fallback** — classifier failures, timeouts, and invalid responses return `fallback_tier`.
 4. **Configured execution** — the effective tier is looked up in `tiers`. A `direct` tier yields no directive; a `delegate` tier yields a `[ROUTER]` directive containing its configured model alias.
 
-The five ordered tiers are:
+The four ordered tiers are:
 
 | Tier | Intended use |
 |------|--------------|
-| `TRIVIAL` | Narrow mechanical work, navigation, tiny edits, or simple explanations |
-| `SIMPLE` | Explicit, local, low-risk implementation work |
-| `STANDARD` | Ordinary engineering features, fixes, and routine refactoring |
+| `SIMPLE` | Narrow mechanical work, navigation, tiny edits, or simple explanations |
+| `STANDARD` | Explicit, local, low-risk implementation work and ordinary engineering features, fixes, and routine refactoring |
 | `COMPLEX` | Cross-module debugging, difficult integrations, concurrency, or deep analysis |
 | `EXTREME` | System-wide architecture, major migrations, or whole-repository investigation |
 
@@ -92,9 +95,8 @@ The five ordered tiers are:
 
 | Tier | Default execution |
 |------|-------------------|
-| `TRIVIAL` | `delegate` using `haiku` |
-| `SIMPLE` | `delegate` using `sonnet` |
-| `STANDARD` | `direct` |
+| `SIMPLE` | `delegate` using `haiku` |
+| `STANDARD` | `delegate` using `sonnet` |
 | `COMPLEX` | `delegate` using `opus` |
 | `EXTREME` | `delegate` using `fable` |
 
@@ -115,9 +117,8 @@ Example `.claude-router.json`:
 ```json
 {
   "tiers": {
-    "TRIVIAL": { "mode": "delegate", "model": "fast-alias" },
-    "SIMPLE": { "mode": "delegate", "model": "balanced-alias" },
-    "STANDARD": { "mode": "direct" },
+    "SIMPLE": { "mode": "delegate", "model": "fast-alias" },
+    "STANDARD": { "mode": "delegate", "model": "balanced-alias" },
     "COMPLEX": { "mode": "delegate", "model": "reasoning-alias" },
     "EXTREME": { "mode": "delegate", "model": "frontier-alias" }
   },
@@ -128,7 +129,7 @@ Example `.claude-router.json`:
   "fallback_tier": "STANDARD",
   "conservative": false,
   "overrides": {
-    "//quick": "TRIVIAL",
+    "//quick": "SIMPLE",
     "//deep": "EXTREME"
   },
   "debug": {
@@ -147,7 +148,7 @@ Example `.claude-router.json`:
 | `classifier.timeout_ms` | `3000` | Classifier request timeout in milliseconds |
 | `fallback_tier` | `STANDARD` | Safe tier used if classification cannot complete |
 | `conservative` | `false` | Shifts the classified tier up one step before its execution is resolved |
-| `overrides` | Five `//<tier>` prefixes | Maps case-insensitive prompt prefixes to tiers; the longest matching prefix wins |
+| `overrides` | Four tier prefixes | Maps case-insensitive prompt prefixes to tiers; the longest matching prefix wins. |
 | `debug.enabled` | `false` | Enables hook debug JSONL output |
 | `debug.prompt_preview_chars` | `150` | Maximum preview length written by debug logging |
 
@@ -167,7 +168,62 @@ An override removes its prefix before routing and bypasses classification:
 //deep investigate this production race condition
 ```
 
-The default prefixes are `//trivial`, `//simple`, `//standard`, `//complex`, and `//extreme`.
+The default prefixes are `//simple`, `//standard`, `//complex`, and `//extreme`.
+
+## Common commands and configuration
+
+### Choose a tier with a prompt prefix
+
+In Claude Code, put a default override prefix at the start of your prompt, followed by a space:
+
+```text
+//simple fix the typo in README.md
+//standard add input validation
+//complex investigate this cross-module race condition
+//extreme review the system architecture
+```
+
+`//simple` selects the `SIMPLE` tier and bypasses classification; it does **not** directly select an arbitrary model. With the default `conservative: false`, execution follows `tiers.SIMPLE`: by default, delegation using `haiku`. To change that alias, merge this snippet into your project's `.claude-router.json`:
+
+```json
+{
+  "tiers": {
+    "SIMPLE": { "mode": "delegate", "model": "sonnet" }
+  }
+}
+```
+
+With this configuration and `conservative: false`, `//simple` delegates using `sonnet`. Setting `tiers.SIMPLE` to `{ "mode": "direct" }` instead keeps the task with the main agent. The alias is still resolved by Claude Code and your Provider or Gateway, not verified by ClaudeRouter.
+
+### Enable conservative routing
+
+Merge this snippet into `.claude-router.json` to enable conservative routing for the current project, or into `~/.claude-router.json` for a user-level default:
+
+```json
+{
+  "conservative": true
+}
+```
+
+The default is `false`. When enabled, the selected tier is shifted up one step **before** its configured execution is resolved: `SIMPLE → STANDARD → COMPLEX → EXTREME`; `EXTREME` stays `EXTREME`. This also applies to manual overrides: `//simple` uses the execution mode and model alias configured for `STANDARD`, not `SIMPLE`. Set `conservative` back to `false` to disable the shift. Project configuration takes precedence over user configuration.
+
+### Frequently used CLI commands
+
+```bash
+# Check installation and hook registration.
+claude-router doctor
+
+# Inspect a manual override's effective tier and execution.
+claude-router route "//simple fix the typo in README.md" --format full
+
+# Print only the configured delegate alias; direct execution prints nothing.
+claude-router route "//simple fix the typo in README.md" --format model
+
+# View routing statistics for the last 7 days.
+claude-router stats --days 7
+```
+
+Run routing commands from the project directory so its `.claude-router.json` is included.
 
 ## Observability and privacy
 
@@ -183,7 +239,7 @@ Set `CLAUDE_ROUTER_DEBUG=1` or `debug.enabled: true` to additionally write `~/.c
 claude-router stats --days 30
 ```
 
-The report shows every tier, current configured execution targets, direct/delegated counts, classifier fallbacks, manual overrides, and the `TRIVIAL` follow-up rate. It does not estimate token or cost savings, and it does not claim a Provider model was used.
+The report shows every tier, current configured execution targets, direct/delegated counts, classifier fallbacks, manual overrides, and the `SIMPLE` follow-up rate. It does not estimate token or cost savings, and it does not claim a Provider model was used.
 
 Example:
 
@@ -191,16 +247,15 @@ Example:
 ClaudeRouter — last 7 days
 ----------------------------------------------------------
 Prompts routed:          42
-TRIVIAL  → delegate (fast-alias)       10   (23.8%)
-SIMPLE   → delegate (balanced-alias)   12   (28.6%)
-STANDARD → direct                       8   (19.0%)
-COMPLEX  → delegate (reasoning-alias)   7   (16.7%)
-EXTREME  → delegate (frontier-alias)    5   (11.9%)
-Direct executions:         8
-Delegated executions:     34
-Classifier fallbacks:      1
-Manual overrides:          2
-Follow-up rate (TRIVIAL): 0.0%  ← lower is better
+SIMPLE   → delegate (fast-alias)        10   (23.8%)
+STANDARD → delegate (balanced-alias)   12   (28.6%)
+COMPLEX  → delegate (reasoning-alias)   8   (19.0%)
+EXTREME  → delegate (frontier-alias)    7   (16.7%)
+Direct executions:        5
+Delegated executions:    37
+Classifier fallbacks:     1
+Manual overrides:         2
+Follow-up rate (SIMPLE):  0.0%  ← lower is better
 ----------------------------------------------------------
 ```
 
@@ -227,16 +282,16 @@ import {
 } from '@0dust/claude-router';
 
 const classification = await classify('fix the typo on line 42');
-// { tier: 'TRIVIAL', source: 'signal', ... }
+// { tier: 'SIMPLE', source: 'signal', ... }
 
 const config = loadConfig();
 const decision = await route('add user authentication', config);
-// { tier: 'STANDARD', execution: { mode: 'direct' }, directive: null, ... }
+// { tier: 'STANDARD', execution: { mode: 'delegate', model: 'sonnet' }, directive: '[ROUTER] Complexity: STANDARD. ...', ... }
 
 const router = createRouter({ telemetry: true });
 await router.route('redesign the authentication architecture');
 console.log(router.stats());
-// { total: 1, tiers: { TRIVIAL: 0, SIMPLE: 0, STANDARD: 0, COMPLEX: 0, EXTREME: 1 }, ... }
+// { total: 1, tiers: { SIMPLE: 0, STANDARD: 0, COMPLEX: 0, EXTREME: 1 }, ... }
 ```
 
 - `classify(prompt)` — full signal and classifier pipeline

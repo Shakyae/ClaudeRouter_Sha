@@ -42,7 +42,7 @@ afterEach(() => {
 });
 
 describe('classify', () => {
-  it.each(['TRIVIAL', 'SIMPLE', 'STANDARD', 'COMPLEX', 'EXTREME'] as const)(
+  it.each(['SIMPLE', 'STANDARD', 'COMPLEX', 'EXTREME'] as const)(
     'accepts %s from the classifier',
     async (tier) => {
       mockCreate.mockResolvedValueOnce({
@@ -149,7 +149,7 @@ describe('classify', () => {
   it('does not call the API for high-confidence signals', async () => {
     const result = await classify('fix typo', DEFAULT_CONFIG);
 
-    expect(result).toMatchObject({ tier: 'TRIVIAL', source: 'signal' });
+    expect(result).toMatchObject({ tier: 'SIMPLE', source: 'signal' });
     expect(mockCreate).not.toHaveBeenCalled();
   });
 
