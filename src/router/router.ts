@@ -1,4 +1,5 @@
 import { classify } from '../classifier/classifier';
+import { getClassifierErrorDetail } from '../redact';
 import type { ExecutionConfig, RoutingDecision, Tier } from '../types';
 import type { RouterConfig } from './config';
 import { resolveExecution, shiftUp } from './model-map';
@@ -70,19 +71,25 @@ export async function route(prompt: string, config: RouterConfig): Promise<Routi
       execution,
       directive: buildDirective(tier, execution),
       classifierModel: classification.classifierModel,
+      classifierRequestModel: classification.classifierRequestModel,
       classifierFailure: classification.classifierFailure,
+      classifierError: classification.classifierError,
+      classifierAttempts: classification.classifierAttempts,
+      classifierAttemptMs: classification.classifierAttemptMs,
       latencyMs: Date.now() - start,
       strippedPrompt: prompt,
     };
-  } catch {
+  } catch (error) {
     const tier = effectiveTier(config.fallback_tier, config);
     const execution = resolveExecution(config.fallback_tier, config);
+    const classifierError = getClassifierErrorDetail(error);
     return {
       tier,
       source: 'fallback',
       execution,
       directive: buildDirective(tier, execution),
       classifierFailure: 'request_error',
+      ...(classifierError ? { classifierError } : {}),
       latencyMs: Date.now() - start,
       strippedPrompt: prompt,
     };

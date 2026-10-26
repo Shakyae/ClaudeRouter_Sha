@@ -50,7 +50,13 @@ describe('config loading', () => {
     expect(config.tiers.COMPLEX).toEqual({ mode: 'delegate', model: 'opus' });
     expect(config.tiers.EXTREME).toEqual({ mode: 'delegate', model: 'fable' });
     expect(config.fallback_tier).toBe('STANDARD');
-    expect(config.classifier).toEqual({ model: 'haiku', timeout_ms: 3000 });
+    expect(config.classifier).toEqual({
+      model: 'haiku',
+      timeout_ms: 10000,
+      max_tokens: 256,
+      max_retries: 1,
+      budget_ms: 20000,
+    });
   });
 
   it('deep-merges a partial tier override without changing other tiers', () => {
@@ -86,7 +92,13 @@ describe('config loading', () => {
     const config = loadConfig(projectDir);
 
     expect(config.tiers.SIMPLE).toEqual({ mode: 'delegate', model: 'project-simple' });
-    expect(config.classifier).toEqual({ model: 'global-classifier', timeout_ms: 2500 });
+    expect(config.classifier).toEqual({
+      model: 'global-classifier',
+      timeout_ms: 2500,
+      max_tokens: 256,
+      max_retries: 1,
+      budget_ms: 20000,
+    });
     expect(config.debug).toEqual({ enabled: true, prompt_preview_chars: 80 });
   });
 
@@ -129,7 +141,21 @@ describe('config loading', () => {
   it('uses the default timeout when a standalone invalid timeout is supplied', () => {
     writeConfig(projectDir, { classifier: { timeout_ms: -1 } });
 
-    expect(loadConfig(projectDir).classifier.timeout_ms).toBe(3000);
+    expect(loadConfig(projectDir).classifier.timeout_ms).toBe(10000);
+  });
+
+  it('overrides the classifier budget from project configuration', () => {
+    writeConfig(projectDir, { classifier: { budget_ms: 8000 } });
+
+    expect(loadConfig(projectDir).classifier.budget_ms).toBe(8000);
+  });
+
+  it('ignores an invalid classifier budget', () => {
+    writeConfig(projectDir, { classifier: { budget_ms: -5 } });
+    expect(loadConfig(projectDir).classifier.budget_ms).toBe(20000);
+
+    writeConfig(projectDir, { classifier: { budget_ms: 1.5 } });
+    expect(loadConfig(projectDir).classifier.budget_ms).toBe(20000);
   });
 
   it('supports configurable manual overrides', () => {

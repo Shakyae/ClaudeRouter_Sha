@@ -1,12 +1,16 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, readFileSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import path from 'path';
 import type { RouterConfig } from '../../src/router/config';
 import type { RoutingDecision } from '../../src/types';
 
-const { mockLoadConfig, mockRoute, mockLogDecision, mockRecordRoutingEvent } = vi.hoisted(() => ({
+const { mockLoadConfig, mockRoute, mockLogDecision, mockRecordRoutingEvent, mockHomedir } = vi.hoisted(() => ({
   mockLoadConfig: vi.fn(),
   mockRoute: vi.fn(),
   mockLogDecision: vi.fn(),
   mockRecordRoutingEvent: vi.fn(),
+  mockHomedir: vi.fn(),
 }));
 
 vi.mock('../../src/router/config', () => ({
@@ -28,7 +32,14 @@ vi.mock('../../src/telemetry/feedback', () => ({
   recordRoutingEvent: mockRecordRoutingEvent,
 }));
 
-import { processHookInput } from '../../src/hooks/user-prompt-submit';
+vi.mock('os', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('os')>();
+  return { ...actual, homedir: mockHomedir };
+});
+
+import { handleHookInput, processHookInput, serializeHookOutput } from '../../src/hooks/user-prompt-submit';
+
+let homeDir: string;
 
 const config: RouterConfig = {
   tiers: {
@@ -37,7 +48,7 @@ const config: RouterConfig = {
     COMPLEX: { mode: 'delegate', model: 'opus' },
     EXTREME: { mode: 'delegate', model: 'fable' },
   },
-  classifier: { model: 'haiku', timeout_ms: 3000 },
+  classifier: { model: 'haiku', timeout_ms: 10000, max_tokens: 256, max_retries: 1, budget_ms: 20000 },
   fallback_tier: 'STANDARD',
   conservative: false,
   overrides: {},
@@ -58,6 +69,8 @@ function decision(overrides: Partial<RoutingDecision> = {}): RoutingDecision {
 
 describe('Node UserPromptSubmit hook', () => {
   beforeEach(() => {
+    homeDir = mkdtempSync(path.join(tmpdir(), 'claude-router-hook-'));
+    mockHomedir.mockReturnValue(homeDir);
     mockLoadConfig.mockReset();
     mockRoute.mockReset();
     mockLogDecision.mockReset();
@@ -66,16 +79,20 @@ describe('Node UserPromptSubmit hook', () => {
     mockRoute.mockResolvedValue(decision());
   });
 
+  afterEach(() => {
+    rmSync(homeDir, { recursive: true, force: true });
+  });
+
   it('routes parsed JSON input through the Router API without shell interpolation', async () => {
     const delegatedDecision = decision();
     mockRoute.mockResolvedValueOnce(delegatedDecision);
 
-    const output = await processHookInput({
+    const output = await handleHookInput({
       prompt: 'find the function',
       cwd: 'C:/workspace/project',
     });
 
-    expect(output).toBe(delegatedDecision.directive);
+    expect(output).toEqual({ additionalContext: delegatedDecision.directive });
     expect(mockLoadConfig).toHaveBeenCalledWith('C:/workspace/project');
     expect(mockRoute).toHaveBeenCalledWith('find the function', config);
     expect(mockLogDecision).toHaveBeenCalledWith(expect.objectContaining({
@@ -121,5 +138,225 @@ describe('Node UserPromptSubmit hook', () => {
 
     mockRoute.mockRejectedValueOnce(new Error('classifier unavailable'));
     await expect(processHookInput({ prompt: 'task' })).resolves.toBe('');
+  });
+});
+
+describe('fallback UI notice', () => {
+  beforeEach(() => {
+    homeDir = mkdtempSync(path.join(tmpdir(), 'claude-router-hook-'));
+    mockHomedir.mockReturnValue(homeDir);
+    mockLoadConfig.mockReturnValue(config);
+    mockRoute.mockResolvedValue(decision());
+    for (const name of [
+      'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+      'ANTHROPIC_DEFAULT_SONNET_MODEL',
+      'ANTHROPIC_DEFAULT_OPUS_MODEL',
+      'ANTHROPIC_DEFAULT_FABLE_MODEL',
+      'CLAUDE_ROUTER_CLASSIFIER_MODEL',
+    ]) {
+      vi.stubEnv(name, '');
+      delete process.env[name];
+    }
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(homeDir, { recursive: true, force: true });
+  });
+
+  it('reports nothing extra when classification succeeds', async () => {
+    const output = await handleHookInput({ prompt: 'find the function' });
+
+    expect(output.systemMessage).toBeUndefined();
+    expect(serializeHookOutput(output)).not.toContain('systemMessage');
+  });
+
+  it('shows the fallback delegate model rather than the classifier model', async () => {
+    vi.stubEnv('ANTHROPIC_DEFAULT_SONNET_MODEL', 'deepseek-v4.1-flash[1M]');
+    vi.stubEnv('CLAUDE_ROUTER_CLASSIFIER_MODEL', 'MiniMax-M3');
+    mockRoute.mockResolvedValueOnce(decision({
+      tier: 'STANDARD',
+      source: 'fallback',
+      execution: { mode: 'delegate', model: 'sonnet' },
+      directive: '[ROUTER] Complexity: STANDARD.',
+      classifierFailure: 'timeout',
+      classifierModel: 'MiniMax-M3[1M]',
+      classifierRequestModel: 'MiniMax-M3',
+    }));
+
+    const output = await handleHookInput({ prompt: 'implement something' });
+
+    expect(output.systemMessage).toBe(
+      'ClaudeRouter: classifier timeout; fell back to STANDARD, delegate model deepseek-v4.1-flash.',
+    );
+    const payload = JSON.parse(serializeHookOutput(output));
+    expect(payload).toEqual({
+      systemMessage: 'ClaudeRouter: classifier timeout; fell back to STANDARD, delegate model deepseek-v4.1-flash.',
+      hookSpecificOutput: {
+        hookEventName: 'UserPromptSubmit',
+        additionalContext: '[ROUTER] Complexity: STANDARD.',
+      },
+    });
+  });
+
+  it('keeps the delegate alias when its environment mapping is unset', async () => {
+    mockRoute.mockResolvedValueOnce(decision({
+      tier: 'STANDARD',
+      source: 'fallback',
+      execution: { mode: 'delegate', model: 'sonnet' },
+      classifierFailure: 'http_503',
+      classifierRequestModel: 'MiniMax-M3',
+    }));
+
+    const output = await handleHookInput({ prompt: 'implement something' });
+
+    expect(output.systemMessage).toBe(
+      'ClaudeRouter: classifier HTTP 503; fell back to STANDARD, delegate model sonnet.',
+    );
+  });
+
+  it('shows an explicitly configured delegate model without classifier model metadata', async () => {
+    vi.stubEnv('ANTHROPIC_DEFAULT_SONNET_MODEL', 'unrelated-model');
+    mockRoute.mockResolvedValueOnce(decision({
+      tier: 'STANDARD',
+      source: 'fallback',
+      execution: { mode: 'delegate', model: 'deepseek-v4.1-flash[1M]' },
+      classifierFailure: 'invalid_output',
+    }));
+
+    const output = await handleHookInput({ prompt: 'implement something' });
+
+    expect(output.systemMessage).toBe(
+      'ClaudeRouter: classifier invalid output; fell back to STANDARD, delegate model deepseek-v4.1-flash.',
+    );
+  });
+
+  it('uses the effective execution after conservative tier shifting', async () => {
+    mockLoadConfig.mockReturnValue({ ...config, conservative: true });
+    vi.stubEnv('ANTHROPIC_DEFAULT_SONNET_MODEL', 'deepseek-v4.1-flash');
+    vi.stubEnv('ANTHROPIC_DEFAULT_OPUS_MODEL', 'gateway-opus[1M]');
+    mockRoute.mockResolvedValueOnce(decision({
+      tier: 'COMPLEX',
+      source: 'fallback',
+      execution: { mode: 'delegate', model: 'opus' },
+      classifierFailure: 'timeout',
+      classifierRequestModel: 'MiniMax-M3',
+    }));
+
+    const output = await handleHookInput({ prompt: 'implement something' });
+
+    expect(output.systemMessage).toBe(
+      'ClaudeRouter: classifier timeout; fell back to COMPLEX, delegate model gateway-opus.',
+    );
+  });
+
+  it('describes direct execution without claiming the classifier is the fallback model', async () => {
+    mockRoute.mockResolvedValueOnce(decision({
+      tier: 'STANDARD',
+      source: 'fallback',
+      execution: { mode: 'direct' },
+      directive: null,
+      classifierFailure: 'timeout',
+      classifierRequestModel: 'MiniMax-M3',
+    }));
+
+    const output = await handleHookInput({ prompt: 'implement something' });
+
+    expect(output).toEqual({
+      additionalContext: '',
+      systemMessage: 'ClaudeRouter: classifier timeout; fell back to STANDARD, direct execution (current model).',
+    });
+  });
+
+  it('throttles repeated notices with the same failure type', async () => {
+    mockRoute.mockResolvedValue(decision({
+      source: 'fallback',
+      classifierFailure: 'timeout',
+    }));
+
+    const first = await handleHookInput({ prompt: 'implement something' });
+    const second = await handleHookInput({ prompt: 'implement something else' });
+
+    expect(first.systemMessage).toBeDefined();
+    expect(second.systemMessage).toBeUndefined();
+    const state = JSON.parse(readFileSync(path.join(homeDir, '.claude-router', 'ui-notice.json'), 'utf-8'));
+    expect(state.timeout).toBeTypeOf('number');
+  });
+
+  it('shows the Provider error reason and passes it to telemetry', async () => {
+    mockRoute.mockResolvedValueOnce(decision({
+      source: 'fallback',
+      classifierFailure: 'http_503',
+      classifierError: '当前集群负载较高',
+      classifierRequestModel: 'MiniMax-M3',
+    }));
+
+    const output = await handleHookInput({ prompt: 'implement something' });
+
+    expect(output.systemMessage).toBe(
+      'ClaudeRouter: classifier HTTP 503 (当前集群负载较高); fell back to SIMPLE, delegate model haiku.',
+    );
+    expect(mockLogDecision).toHaveBeenCalledWith(expect.objectContaining({
+      classifier_failure: 'http_503',
+      classifier_error: '当前集群负载较高',
+    }));
+  });
+
+  it('re-sanitizes the reason before showing it', async () => {
+    mockRoute.mockResolvedValueOnce(decision({
+      source: 'fallback',
+      classifierFailure: 'http_401',
+      classifierError: 'invalid key sk-live-secret (Bearer abc123)',
+    }));
+
+    const output = await handleHookInput({ prompt: 'implement something' });
+
+    expect(output.systemMessage).not.toContain('sk-live-secret');
+    expect(output.systemMessage).not.toContain('abc123');
+    expect(output.systemMessage).toContain('[redacted]');
+    expect(mockLogDecision).toHaveBeenCalledWith(expect.objectContaining({
+      classifier_error: 'invalid key [redacted] (Bearer [redacted])',
+    }));
+  });
+
+  it('writes the reason to the debug log', async () => {
+    mockLoadConfig.mockReturnValue({ ...config, debug: { ...config.debug, enabled: true } });
+    mockRoute.mockResolvedValueOnce(decision({
+      source: 'fallback',
+      classifierFailure: 'http_503',
+      classifierError: '当前集群负载较高',
+    }));
+
+    await handleHookInput({ prompt: 'implement something' });
+
+    const debugPath = path.join(homeDir, '.claude-router', 'debug.jsonl');
+    const event = JSON.parse(readFileSync(debugPath, 'utf-8').trim());
+    expect(event).toMatchObject({
+      classifier_failure: 'http_503',
+      classifier_error: '当前集群负载较高',
+    });
+  });
+
+  it('shows an HTTP status and never shows a notice for overrides', async () => {
+    mockRoute.mockResolvedValueOnce(decision({
+      source: 'fallback',
+      classifierFailure: 'http_400',
+    }));
+    const fallbackOutput = await handleHookInput({ prompt: 'implement something' });
+    expect(fallbackOutput.systemMessage).toContain('HTTP 400');
+
+    mockRoute.mockResolvedValueOnce(decision({ source: 'override', tier: 'COMPLEX' }));
+    const overrideOutput = await handleHookInput({ prompt: '//complex do it' });
+    expect(overrideOutput.systemMessage).toBeUndefined();
+  });
+});
+
+describe('serializeHookOutput', () => {
+  it('keeps the plain-text directive when there is no notice', () => {
+    expect(serializeHookOutput({ additionalContext: 'plain directive' })).toBe('plain directive');
+  });
+
+  it('returns an empty string when there is nothing to say', () => {
+    expect(serializeHookOutput({ additionalContext: '' })).toBe('');
   });
 });

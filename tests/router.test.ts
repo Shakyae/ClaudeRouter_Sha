@@ -123,8 +123,10 @@ describe('route', () => {
       source: 'fallback',
       latencyMs: 1,
       promptTokens: 0,
-      classifierModel: 'haiku',
-      classifierFailure: 'http_400',
+      classifierModel: 'MiniMax-M3.1-Flash[1M]',
+      classifierRequestModel: 'MiniMax-M3.1-Flash',
+      classifierFailure: 'http_503',
+      classifierError: '当前集群负载较高',
     });
 
     const decision = await route('ordinary task', DEFAULT_CONFIG);
@@ -133,7 +135,23 @@ describe('route', () => {
       tier: 'STANDARD',
       source: 'fallback',
       execution: { mode: 'delegate', model: 'sonnet' },
-      classifierFailure: 'http_400',
+      classifierRequestModel: 'MiniMax-M3.1-Flash',
+      classifierFailure: 'http_503',
+      classifierError: '当前集群负载较高',
+    });
+    expect(decision.directive).toContain('model "sonnet"');
+    expect(decision.directive).not.toContain('MiniMax');
+  });
+
+  it('keeps the reason when classify() itself throws', async () => {
+    mockClassify.mockRejectedValueOnce(new Error('当前集群负载较高 (Bearer secret-token)'));
+
+    const decision = await route('ordinary task', DEFAULT_CONFIG);
+
+    expect(decision).toMatchObject({
+      source: 'fallback',
+      classifierFailure: 'request_error',
+      classifierError: '当前集群负载较高 (Bearer [redacted])',
     });
   });
 });

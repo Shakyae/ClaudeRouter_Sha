@@ -25,7 +25,12 @@ export interface RoutingDecision {
   execution: ExecutionConfig;
   directive: string | null;
   classifierModel?: string;
+  classifierRequestModel?: string;
   classifierFailure?: ClassifierFailure;
+  /** Sanitized, truncated reason returned by the Provider or gateway. */
+  classifierError?: string;
+  classifierAttempts?: number;
+  classifierAttemptMs?: number[];
   latencyMs: number;
   strippedPrompt: string;
 }

@@ -98,6 +98,64 @@ describe('telemetry e2e', () => {
     ]);
   });
 
+  it('persists and re-sanitizes the classifier error reason', () => {
+    logDecision(makeEvent({
+      source: 'fallback',
+      classifier_failure: 'http_503',
+      classifier_error: '当前集群负载较高',
+    }));
+
+    expect(readEvents()).toEqual([
+      expect.objectContaining({
+        classifier_failure: 'http_503',
+        classifier_error: '当前集群负载较高',
+      }),
+    ]);
+  });
+
+  it('redacts credentials read back from an existing events file', () => {
+    fs.mkdirSync(eventsDir(), { recursive: true });
+    fs.writeFileSync(
+      eventsPath(),
+      `${JSON.stringify(makeEvent({
+        source: 'fallback',
+        classifier_failure: 'http_401',
+        classifier_error: 'bad key sk-leaked-secret',
+      }))}\n`,
+      'utf-8',
+    );
+
+    expect(readEvents()[0].classifier_error).toBe('bad key [redacted]');
+  });
+
+  it('drops an empty classifier error reason', () => {
+    logDecision(makeEvent({ classifier_error: '   ' }));
+
+    expect(readEvents()[0]).not.toHaveProperty('classifier_error');
+  });
+
+  it('keeps the raw classifier model next to the sanitized request model', () => {
+    logDecision(makeEvent({
+      classifier_model: 'MiniMax-M3[1M]',
+      classifier_request_model: 'MiniMax-M3',
+      classifier_attempts: 2,
+    }));
+
+    expect(readEvents()).toEqual([
+      expect.objectContaining({
+        classifier_model: 'MiniMax-M3[1M]',
+        classifier_request_model: 'MiniMax-M3',
+        classifier_attempts: 2,
+      }),
+    ]);
+  });
+
+  it('drops malformed classifier attempt counts', () => {
+    logDecision(makeEvent({ classifier_attempts: 0 }));
+
+    expect(readEvents()[0]).not.toHaveProperty('classifier_attempts');
+  });
+
   it('records delegate aliases only as configured targets', () => {
     logDecision(
       makeEvent({

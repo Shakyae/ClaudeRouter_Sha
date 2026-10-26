@@ -8,6 +8,9 @@ export interface RouterConfig {
   classifier: {
     model: string;
     timeout_ms: number;
+    max_tokens: number;
+    max_retries: number;
+    budget_ms: number;
   };
   fallback_tier: Tier;
   conservative: boolean;
@@ -36,7 +39,10 @@ export const DEFAULT_CONFIG: RouterConfig = {
   },
   classifier: {
     model: 'haiku',
-    timeout_ms: 3000,
+    timeout_ms: 10000,
+    max_tokens: 256,
+    max_retries: 1,
+    budget_ms: 20000,
   },
   fallback_tier: 'STANDARD',
   conservative: false,
@@ -52,6 +58,10 @@ export const DEFAULT_CONFIG: RouterConfig = {
     prompt_preview_chars: 150,
   },
 };
+
+// Claude Code kills a command hook after 30 seconds by default. Keeping the
+// classifier budget below that leaves room to emit a fallback directive.
+const SAFE_BUDGET_MS = 25000;
 
 type JsonRecord = Record<string, unknown>;
 
@@ -167,6 +177,33 @@ function mergeClassifier(result: RouterConfig, classifier: unknown): void {
       result.classifier.timeout_ms = classifier.timeout_ms;
     } else {
       warn('classifier.timeout_ms must be a non-negative finite number; ignoring it');
+    }
+  }
+
+  if ('max_tokens' in classifier) {
+    if (typeof classifier.max_tokens === 'number' && Number.isInteger(classifier.max_tokens) && classifier.max_tokens > 0) {
+      result.classifier.max_tokens = classifier.max_tokens;
+    } else {
+      warn('classifier.max_tokens must be a positive integer; ignoring it');
+    }
+  }
+
+  if ('max_retries' in classifier) {
+    if (typeof classifier.max_retries === 'number' && Number.isInteger(classifier.max_retries) && classifier.max_retries >= 0) {
+      result.classifier.max_retries = classifier.max_retries;
+    } else {
+      warn('classifier.max_retries must be a non-negative integer; ignoring it');
+    }
+  }
+
+  if ('budget_ms' in classifier) {
+    if (typeof classifier.budget_ms === 'number' && Number.isInteger(classifier.budget_ms) && classifier.budget_ms > 0) {
+      result.classifier.budget_ms = classifier.budget_ms;
+      if (classifier.budget_ms > SAFE_BUDGET_MS) {
+        warn('classifier.budget_ms exceeds 25000; Claude Code aborts hooks after 30 seconds by default');
+      }
+    } else {
+      warn('classifier.budget_ms must be a positive integer; ignoring it');
     }
   }
 }

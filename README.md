@@ -124,7 +124,10 @@ Example `.claude-router.json`:
   },
   "classifier": {
     "model": "classifier-alias",
-    "timeout_ms": 3000
+    "timeout_ms": 10000,
+    "max_tokens": 256,
+    "max_retries": 1,
+    "budget_ms": 20000
   },
   "fallback_tier": "STANDARD",
   "conservative": false,
@@ -145,7 +148,10 @@ Example `.claude-router.json`:
 |-------|---------|-------------|
 | `tiers.<TIER>` | See [Default execution](#default-execution) | `{ "mode": "direct" }` or `{ "mode": "delegate", "model": "alias" }` |
 | `classifier.model` | `haiku` | Classifier model alias or Provider model ID; see [Classifier model resolution](#classifier-model-resolution) |
-| `classifier.timeout_ms` | `3000` | Classifier request timeout in milliseconds |
+| `classifier.timeout_ms` | `10000` | Per-attempt classifier timeout in milliseconds |
+| `classifier.max_tokens` | `256` | Output budget per classifier attempt; overridable with `CLAUDE_ROUTER_CLASSIFIER_MAX_TOKENS` |
+| `classifier.max_retries` | `1` | Transient-error retries performed by ClaudeRouter itself (the SDK is never allowed to retry), on top of the thinking-only retry described below |
+| `classifier.budget_ms` | `20000` | Total time budget for all classifier attempts, including retries and backoff. Claude Code aborts a hook after 30 seconds by default, so keep this well below that; only raise it if you also configure a `timeout` for the hook |
 | `fallback_tier` | `STANDARD` | Safe tier used if classification cannot complete |
 | `conservative` | `false` | Shifts the classified tier up one step before its execution is resolved |
 | `overrides` | Four tier prefixes | Maps case-insensitive prompt prefixes to tiers; the longest matching prefix wins. |
@@ -157,10 +163,12 @@ Example `.claude-router.json`:
 At classifier request time, ClaudeRouter selects the model in this order:
 
 1. A non-empty `CLAUDE_ROUTER_CLASSIFIER_MODEL`.
-2. A non-empty `ANTHROPIC_DEFAULT_HAIKU_MODEL`, but only when `classifier.model` is `haiku` (case-insensitive).
+2. The environment variable matching `classifier.model` when it is an alias, case-insensitively: `haiku` → `ANTHROPIC_DEFAULT_HAIKU_MODEL`, `sonnet` → `ANTHROPIC_DEFAULT_SONNET_MODEL`, `opus` → `ANTHROPIC_DEFAULT_OPUS_MODEL`, `fable` → `ANTHROPIC_DEFAULT_FABLE_MODEL`.
 3. The configured `classifier.model`.
 
-The second step is a compatibility mechanism for the Hook process after it inherits Claude Code's environment. It does not validate that the configured alias or mapped value is the final Provider model. A configured classifier model other than `haiku` is never replaced by `ANTHROPIC_DEFAULT_HAIKU_MODEL`.
+Step 2 is a compatibility mechanism for the Hook process after it inherits Claude Code's environment. It does not validate that the configured alias or mapped value is the final Provider model. A configured classifier model that is not an alias is never replaced by an alias environment variable.
+
+Whichever value wins, a trailing `[1M]` / `[1m]` context marker (Claude Code appends these, and gateways match model names exactly) is stripped before the request is sent; repeated markers such as `[1m][1M]` are collapsed too. Debug logs keep both the raw configured value and the sanitized request model.
 
 An override removes its prefix before routing and bypasses classification:
 
@@ -227,9 +235,9 @@ Run routing commands from the project directory so its `.claude-router.json` is 
 
 ## Observability and privacy
 
-Routing events are written to `~/.claude-router/events.jsonl`. They contain a SHA-256 prompt hash, token estimate, tier, source, execution mode, timing, and—only for delegated work—the configured alias in `configured_model`. Raw prompts and API keys are never written to this telemetry file.
+Routing events are written to `~/.claude-router/events.jsonl`. They contain a SHA-256 prompt hash, token estimate, tier, source, execution mode, timing, and—only for delegated work—the configured alias in `configured_model`. When the classifier falls back, `classifier_failure` records the failure type and `classifier_error` records the sanitized reason returned by the Provider or gateway (for example, `当前集群负载较高`), truncated to 300 characters. `Bearer` tokens and `sk-...` API keys are replaced with `[redacted]` before anything is written. Raw prompts, request headers, and API keys are never written to this telemetry file.
 
-Set `CLAUDE_ROUTER_DEBUG=1` or `debug.enabled: true` to additionally write `~/.claude-router/debug.jsonl`. Debug records contain only the configured-length `prompt_preview`, never the full prompt or an API key.
+Set `CLAUDE_ROUTER_DEBUG=1` or `debug.enabled: true` to additionally write `~/.claude-router/debug.jsonl`. Debug records contain the same `classifier_failure` and `classifier_error` fields, plus only the configured-length `prompt_preview`; never the full prompt or an API key.
 
 `configured_model` means **the alias selected by ClaudeRouter**, not the final Provider model actually used. Verify the final model mapping from your Provider or Gateway request logs and their `model` field.
 
@@ -305,6 +313,10 @@ console.log(router.stats());
 ClaudeRouter is fail-open and never intentionally blocks Claude Code:
 
 - Classifier errors, timeouts, and malformed results use `fallback_tier`.
+- All classifier attempts share one `classifier.budget_ms` deadline. Transport errors, timeouts, `429`, and `5xx` responses are retried up to `classifier.max_retries` times with a fixed 250 ms backoff; other `4xx` responses are not retried. The SDK's own retry logic is disabled, so a server-supplied `Retry-After` can never stall the hook.
+- A classifier response that spends its whole budget on a thinking block is retried once with a 4× larger budget (capped at 2048 tokens) before it counts as `invalid_output` — unless the remaining budget is too small for another attempt.
+- When a fallback happens, the Hook prints a `systemMessage` (shown in the Claude Code UI) alongside the `[ROUTER]` directive. The same failure type is announced at most once per 60 seconds.
+- The `systemMessage` includes the Provider's own reason when one is available, e.g. `ClaudeRouter: classifier HTTP 503 (当前集群负载较高); fell back to STANDARD, model MiniMax-M3.` Response-body messages take precedence over the SDK's generic `message`; the reason is whitespace-collapsed, truncated to 300 characters, and has `Bearer` tokens and `sk-...` keys redacted. The same value is written to `classifier_error` in `events.jsonl` and `debug.jsonl`.
 - Hook parsing, configuration, telemetry, and debug errors produce no directive and exit successfully.
 - `is_subagent: true` prevents recursive hook routing for subagents.
 - A `direct` execution deliberately emits no directive, leaving the task with the main agent.
@@ -325,7 +337,15 @@ Inspect the relevant tier in `.claude-router.json`. `direct` is an intentional e
 
 **All uncertain prompts use one tier**
 
-If a third-party Gateway rejects `haiku`, first verify Claude Code's `ANTHROPIC_DEFAULT_HAIKU_MODEL` mapping. ClaudeRouter uses that mapping only when `classifier.model` remains `haiku`. Use `CLAUDE_ROUTER_CLASSIFIER_MODEL` only when an explicit Router-specific override is required. Also check `fallback_tier` and the classifier API environment; the fallback is normally `STANDARD`.
+If a third-party Gateway rejects `haiku`, first verify Claude Code's `ANTHROPIC_DEFAULT_HAIKU_MODEL` mapping. ClaudeRouter uses that mapping only when `classifier.model` remains `haiku`.
+
+**The UI shows "classifier timeout" or another fallback reason**
+
+The message states the tier ClaudeRouter fell back to, the failure type (`timeout`, `http_400`, `invalid_output`, `request error`), the sanitized model name that was sent, and — when the SDK or gateway returned one — the underlying reason in parentheses (for example `当前集群负载较高`). The same reason is stored as `classifier_error` in `events.jsonl` and `debug.jsonl`. `timeout` means the classifier did not answer within `classifier.timeout_ms` (or that `classifier.budget_ms` ran out); raise them or lower `classifier.max_retries` to cap total waiting time. `invalid_output` means the model replied, but not with one of the four tiers. Set `CLAUDE_ROUTER_DEBUG=1` to log per-attempt timings in `~/.claude-router/debug.jsonl`. Use `CLAUDE_ROUTER_CLASSIFIER_MODEL` only when an explicit Router-specific override is required. Also check `fallback_tier` and the classifier API environment; the fallback is normally `STANDARD`.
+
+**Claude Code reports `UserPromptSubmit hook ... timed out after 30s`**
+
+Claude Code kills a command hook after 30 seconds and discards its output, so no `[ROUTER]` directive is injected and the prompt stays with the main agent. ClaudeRouter's classifier now stops at `classifier.budget_ms` (default 20000) and returns `fallback_tier` instead, which keeps the total under that limit. If you still see this message, check that `classifier.budget_ms` is not set above 25000 in `~/.claude-router.json` or the project `.claude-router.json`. Raising Claude Code's hook `timeout` in `~/.claude/settings.json` is only needed if you deliberately want a longer classifier budget.
 
 **The configured alias did not become the expected Provider model**
 

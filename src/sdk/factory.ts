@@ -58,6 +58,10 @@ export function createRouter(options?: {
             : {}),
           source: decision.source,
           ...(decision.classifierFailure ? { classifier_failure: decision.classifierFailure } : {}),
+          ...(decision.classifierError ? { classifier_error: decision.classifierError } : {}),
+          ...(decision.classifierAttempts ? { classifier_attempts: decision.classifierAttempts } : {}),
+          ...(decision.classifierModel ? { classifier_model: decision.classifierModel } : {}),
+          ...(decision.classifierRequestModel ? { classifier_request_model: decision.classifierRequestModel } : {}),
           latency_ms: decision.latencyMs,
           manual_override: decision.source === 'override',
         });

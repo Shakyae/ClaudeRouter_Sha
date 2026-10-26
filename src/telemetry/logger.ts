@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
 import { isTier, type ClassifierFailure, type ExecutionConfig, type RoutingSource, type Tier } from '../types';
+import { sanitizeErrorDetail } from '../redact';
 
 export interface RoutingEvent {
   ts: string;
@@ -13,6 +14,11 @@ export interface RoutingEvent {
   execution_mode: ExecutionConfig['mode'];
   configured_model?: string;
   classifier_failure?: ClassifierFailure;
+  /** Sanitized Provider/gateway error reason, truncated to 300 characters. */
+  classifier_error?: string;
+  classifier_attempts?: number;
+  classifier_model?: string;
+  classifier_request_model?: string;
   source: RoutingSource;
   latency_ms: number;
   had_followup: boolean;
@@ -85,6 +91,22 @@ function normalizeEvent(value: unknown): RoutingEvent | null {
   const classifierFailure = isClassifierFailure(value.classifier_failure)
     ? value.classifier_failure
     : undefined;
+  const classifierError =
+    typeof value.classifier_error === 'string' && value.classifier_error.trim()
+      ? sanitizeErrorDetail(value.classifier_error) || undefined
+      : undefined;
+  const classifierAttempts =
+    typeof value.classifier_attempts === 'number' && Number.isInteger(value.classifier_attempts) && value.classifier_attempts > 0
+      ? value.classifier_attempts
+      : undefined;
+  const classifierModel =
+    typeof value.classifier_model === 'string' && value.classifier_model.trim()
+      ? value.classifier_model
+      : undefined;
+  const classifierRequestModel =
+    typeof value.classifier_request_model === 'string' && value.classifier_request_model.trim()
+      ? value.classifier_request_model
+      : undefined;
 
   return {
     ts: value.ts,
@@ -95,6 +117,10 @@ function normalizeEvent(value: unknown): RoutingEvent | null {
     execution_mode: executionMode,
     ...(configuredModel ? { configured_model: configuredModel } : {}),
     ...(classifierFailure ? { classifier_failure: classifierFailure } : {}),
+    ...(classifierError ? { classifier_error: classifierError } : {}),
+    ...(classifierAttempts ? { classifier_attempts: classifierAttempts } : {}),
+    ...(classifierModel ? { classifier_model: classifierModel } : {}),
+    ...(classifierRequestModel ? { classifier_request_model: classifierRequestModel } : {}),
     source,
     latency_ms: value.latency_ms,
     had_followup: value.had_followup === true,
@@ -212,7 +238,15 @@ function writeEntry(line: string, ts: string): void {
 export function logDecision(event: Omit<RoutingEvent, 'had_followup'>): void {
   try {
     ensureDir();
+    const classifierError = event.classifier_error
+      ? sanitizeErrorDetail(event.classifier_error) || undefined
+      : undefined;
     const full: RoutingEvent = { ...event, had_followup: false };
+    if (classifierError) {
+      full.classifier_error = classifierError;
+    } else {
+      delete full.classifier_error;
+    }
     writeEntry(JSON.stringify(full), full.ts);
   } catch {
     // Never throw — telemetry must not crash the hook

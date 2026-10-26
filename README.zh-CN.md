@@ -124,7 +124,10 @@ ClaudeRouter 按以下优先级合并配置：
   },
   "classifier": {
     "model": "classifier-alias",
-    "timeout_ms": 3000
+    "timeout_ms": 10000,
+    "max_tokens": 256,
+    "max_retries": 1,
+    "budget_ms": 20000
   },
   "fallback_tier": "STANDARD",
   "conservative": false,
@@ -145,7 +148,10 @@ ClaudeRouter 按以下优先级合并配置：
 |------|--------|------|
 | `tiers.<TIER>` | 见[默认执行方式](#默认执行方式) | `{ "mode": "direct" }` 或 `{ "mode": "delegate", "model": "alias" }` |
 | `classifier.model` | `haiku` | 分类器模型别名或 Provider 模型 ID；参见[分类器模型解析](#分类器模型解析) |
-| `classifier.timeout_ms` | `3000` | 分类器请求超时时间，单位为毫秒 |
+| `classifier.timeout_ms` | `10000` | 分类器单次请求超时时间，单位为毫秒 |
+| `classifier.max_tokens` | `256` | 每次分类请求的输出预算；可用 `CLAUDE_ROUTER_CLASSIFIER_MAX_TOKENS` 覆盖 |
+| `classifier.max_retries` | `1` | 由 ClaudeRouter 自身执行的瞬时错误重试次数（SDK 不再自行重试），叠加下文「仅思考块」重试 |
+| `classifier.budget_ms` | `20000` | 分类器所有尝试的总时间预算，包含重试与退避。Claude Code 默认在 30 秒后终止 hook，因此该值应明显低于 30 秒；只有同时为 hook 配置了 `timeout` 时才需要调高 |
 | `fallback_tier` | `STANDARD` | 分类无法完成时使用的安全档位 |
 | `conservative` | `false` | 在解析执行方式前，将分类档位提升一个级别 |
 | `overrides` | 四个档位前缀 | 将不区分大小写的提示前缀映射到档位；匹配多个前缀时采用最长匹配项 |
@@ -157,10 +163,12 @@ ClaudeRouter 按以下优先级合并配置：
 每次发起分类器请求时，ClaudeRouter 按以下顺序选择模型：
 
 1. 非空的 `CLAUDE_ROUTER_CLASSIFIER_MODEL`。
-2. 当 `classifier.model` 为 `haiku`（不区分大小写）时，使用非空的 `ANTHROPIC_DEFAULT_HAIKU_MODEL`。
+2. `classifier.model` 命中别名时（不区分大小写），使用对应环境变量：`haiku` → `ANTHROPIC_DEFAULT_HAIKU_MODEL`，`sonnet` → `ANTHROPIC_DEFAULT_SONNET_MODEL`，`opus` → `ANTHROPIC_DEFAULT_OPUS_MODEL`，`fable` → `ANTHROPIC_DEFAULT_FABLE_MODEL`。
 3. 使用配置中的 `classifier.model`。
 
-第二步是兼容机制：Hook 进程继承 Claude Code 的环境变量后，可据此解析模型。它不会验证配置别名或映射值是否为最终 Provider 模型。若配置的分类器模型不是 `haiku`，则不会被 `ANTHROPIC_DEFAULT_HAIKU_MODEL` 替换。
+第二步是兼容机制：Hook 进程继承 Claude Code 的环境变量后，可据此解析模型。它不会验证配置别名或映射值是否为最终 Provider 模型。若配置的分类器模型不是别名，则不会被别名环境变量替换。
+
+无论采用哪一来源，发送请求前都会去掉结尾的 `[1M]` / `[1m]` 上下文标记（Claude Code 会追加该标记，而中转站按精确名称匹配），重复标记（如 `[1m][1M]`）也会被折叠。调试日志会同时保留原始配置值和清洗后的请求模型名。
 
 覆盖前缀会在路由前被移除，并跳过分类器：
 
@@ -227,9 +235,9 @@ claude-router stats --days 7
 
 ## 可观测性与隐私
 
-路由事件写入 `~/.claude-router/events.jsonl`。事件包含 SHA-256 提示哈希、token 估算值、档位、来源、执行模式、耗时，以及仅在委派任务时记录的 `configured_model` 别名。原始提示和 API key 不会写入此遥测文件。
+路由事件写入 `~/.claude-router/events.jsonl`。事件包含 SHA-256 提示哈希、token 估算值、档位、来源、执行模式、耗时，以及仅在委派任务时记录的 `configured_model` 别名。分类器回退时，`classifier_failure` 记录失败类型，`classifier_error` 记录 Provider 或网关返回的、经过脱敏的原因（例如 `当前集群负载较高`），最长 300 个字符。写入前会把 `Bearer` token 和 `sk-...` 形式的 API key 替换为 `[redacted]`。原始提示、请求头和 API key 不会写入此遥测文件。
 
-设置 `CLAUDE_ROUTER_DEBUG=1` 或 `debug.enabled: true` 后，还会写入 `~/.claude-router/debug.jsonl`。调试记录只包含按配置长度截断的 `prompt_preview`，不会记录完整提示或 API key。
+设置 `CLAUDE_ROUTER_DEBUG=1` 或 `debug.enabled: true` 后，还会写入 `~/.claude-router/debug.jsonl`。调试记录包含同样的 `classifier_failure` 和 `classifier_error` 字段，以及按配置长度截断的 `prompt_preview`；不会记录完整提示或 API key。
 
 `configured_model` 表示 **ClaudeRouter 选定的别名**，并不代表实际使用的最终 Provider 模型。请从 Provider 或 Gateway 请求日志的 `model` 字段核实最终模型映射。
 
@@ -305,6 +313,10 @@ console.log(router.stats());
 ClaudeRouter 采用 fail-open 设计，不会有意阻止 Claude Code：
 
 - 分类器错误、超时和格式错误的结果使用 `fallback_tier`。
+- 所有分类尝试共用一个 `classifier.budget_ms` 截止时间。传输错误、超时、`429` 和 `5xx` 会按 `classifier.max_retries` 重试，退避固定为 250 毫秒；其他 `4xx` 不重试。SDK 自带的重试被关闭，因此服务端返回的 `Retry-After` 不会拖住 hook。
+- 若分类器把整个预算耗在思考块上、没有返回文本，会用 4 倍预算（上限 2048 token）重试一次，仍失败才记为 `invalid_output`；若剩余预算不足以再发一次请求，则直接记为 `invalid_output`。
+- 发生回退时，Hook 会在 `[ROUTER]` 指令之外输出 `systemMessage`（在 Claude Code 界面可见）。同一失败类型最多每 60 秒提示一次。
+- 如果 Provider 返回了可读原因，`systemMessage` 会一并展示，例如 `ClaudeRouter: classifier HTTP 503 (当前集群负载较高); fell back to STANDARD, model MiniMax-M3.`。响应体中的 message 优先于 SDK 的通用 `message`；原因会合并空白、截断到 300 个字符，并将 `Bearer` token 和 `sk-...` key 脱敏。同样的值会写入 `events.jsonl` 和 `debug.jsonl` 的 `classifier_error` 字段。
 - Hook 解析、配置、遥测和调试错误会导致不输出 directive，并以成功状态退出。
 - `is_subagent: true` 会阻止对子 agent 递归执行路由。
 - `direct` 执行方式有意不产生 directive，任务继续由主 agent 处理。
@@ -325,7 +337,15 @@ ClaudeRouter 采用 fail-open 设计，不会有意阻止 Claude Code：
 
 **所有不确定的提示都被分到同一档**
 
-如果第三方 Gateway 拒绝 `haiku`，请先确认 Claude Code 的 `ANTHROPIC_DEFAULT_HAIKU_MODEL` 映射。只有 `classifier.model` 仍为 `haiku` 时，ClaudeRouter 才会使用该映射。仅在确实需要 Router 专属覆盖时使用 `CLAUDE_ROUTER_CLASSIFIER_MODEL`。同时检查 `fallback_tier` 和分类器 API 环境；默认回退档位通常为 `STANDARD`。
+如果第三方 Gateway 拒绝 `haiku`，请先确认 Claude Code 的 `ANTHROPIC_DEFAULT_HAIKU_MODEL` 映射。只有 `classifier.model` 仍为 `haiku` 时，ClaudeRouter 才会使用该映射。
+
+**界面提示分类器超时或其他回退原因**
+
+提示会说明回退后的档位、失败类型（`timeout`、`http_400`、`invalid_output`、`request error`）、实际发送的模型名，以及（如果 SDK 或网关返回了）括号中的真实原因（例如 `当前集群负载较高`）。同样的原因会以 `classifier_error` 写入 `events.jsonl` 和 `debug.jsonl`。`timeout` 表示分类器未在 `classifier.timeout_ms` 内响应（或 `classifier.budget_ms` 已耗尽），可调大超时或调小 `classifier.max_retries` 以限制总等待时间；`invalid_output` 表示模型有响应但不是四个档位之一。设置 `CLAUDE_ROUTER_DEBUG=1` 可在 `~/.claude-router/debug.jsonl` 查看每次尝试的耗时。仅在确实需要 Router 专属覆盖时使用 `CLAUDE_ROUTER_CLASSIFIER_MODEL`。同时检查 `fallback_tier` 和分类器 API 环境；默认回退档位通常为 `STANDARD`。
+
+**Claude Code 提示 `UserPromptSubmit hook ... timed out after 30s`**
+
+Claude Code 会在 30 秒后终止命令 hook 并丢弃其输出，因此 `[ROUTER]` 指令不会被注入，提示实际留在主 agent 处理。现在 ClaudeRouter 的分类器会在 `classifier.budget_ms`（默认 20000）时主动停止并返回 `fallback_tier`，把总耗时控制在该上限之内。若仍看到此提示，请检查 `~/.claude-router.json` 或项目 `.claude-router.json` 中的 `classifier.budget_ms` 是否超过 25000。只有在确实需要更长的分类预算时，才需要调整 `~/.claude/settings.json` 中 hook 的 `timeout`。
 
 **配置的别名没有解析为预期的 Provider 模型**
 
