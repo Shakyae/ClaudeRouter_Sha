@@ -80,6 +80,7 @@ src/
     init.ts            # Node-hook registration and managed CLAUDE.md block
     doctor.ts          # installation checks
     stats.ts           # event aggregation and configured-target display
+    hook-path.ts       # hook path resolution and settings.json hook matching
   sdk/
     factory.ts          # createRouter(): stateful router with session stats
     index.ts            # public re-exports

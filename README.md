@@ -42,6 +42,8 @@ claude-router init
 node <absolute-package-path>/dist/hooks/user-prompt-submit.js
 ```
 
+`init` writes the absolute path, but `claude-router doctor` also recognises the equivalent `$HOME`, `${HOME}`, `~`, `${CLAUDE_PLUGIN_ROOT}`, `%USERPROFILE%`, `$env:USERPROFILE` and `$USERPROFILE` spellings if you edit the entry by hand.
+
 The optional path only determines which `CLAUDE.md` receives the managed ClaudeRouter runtime directive. The target directory must already exist; `init` does not create it. Without a path, `claude-router init` targets the current project; to target another project:
 
 ```bash
@@ -329,7 +331,7 @@ Run `npm run build`, then run `claude-router init` again.
 
 **No events appear in stats**
 
-Run `claude-router doctor`. It checks whether the absolute Node hook command is registered in `~/.claude/settings.json`.
+Run `claude-router doctor`. It checks whether the Node hook command is registered in `~/.claude/settings.json`, recognising both the absolute path written by `init` and equivalent `$HOME`, `${HOME}`, `~`, `${CLAUDE_PLUGIN_ROOT}`, `%USERPROFILE%`, `$env:USERPROFILE` and `$USERPROFILE` spellings.
 
 **A prompt unexpectedly stays with the main agent**
 

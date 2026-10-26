@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { getHookCommand, getHookPath, isRouterHook } from './hook-path';
 
 function getSettingsPath(): string {
   return path.join(os.homedir(), '.claude', 'settings.json');
@@ -23,45 +24,11 @@ function writeJsonFile(filePath: string, data: Record<string, any>): void {
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2) + '\n', 'utf-8');
 }
 
-function getHookPath(): string {
-  return path.resolve(__dirname, '..', '..', 'dist', 'hooks', 'user-prompt-submit.js');
-}
-
-
-function getLegacyHookPath(): string {
-  return path.resolve(__dirname, '..', '..', 'hooks', 'user-prompt-submit.sh');
-}
-
-function getHookCommand(): string {
-  return `node \"${getHookPath()}\"`;
-}
-
-function isRouterCommand(command: unknown): boolean {
-  return typeof command === 'string' && (
-    command === getHookCommand() ||
-    command.includes(getHookPath()) ||
-    command.includes(getLegacyHookPath())
-  );
-}
-
-function isRouterHook(entry: unknown): boolean {
-  if (typeof entry !== 'object' || entry === null) {
-    return false;
-  }
-
-  if ('command' in entry && isRouterCommand((entry as { command?: unknown }).command)) {
-    return true;
-  }
-
-  const hooks = (entry as { hooks?: unknown }).hooks;
-  return Array.isArray(hooks) && hooks.some(isRouterHook);
-}
-
 function getRuntimeClaudeMdPath(): string {
   return path.resolve(__dirname, '..', '..', 'runtime-claude.md');
 }
 
-export function handleInit(args: string[]): void {
+export function handleInit(args: string[], expectedPaths?: readonly string[]): void {
   try {
     console.log('ClaudeRouter init\n');
 
@@ -89,9 +56,11 @@ export function handleInit(args: string[]): void {
       settings.hooks.UserPromptSubmit = [];
     }
 
-    const hadRouterHook = settings.hooks.UserPromptSubmit.some(isRouterHook);
+    const hadRouterHook = settings.hooks.UserPromptSubmit.some(
+      (entry: unknown) => isRouterHook(entry, expectedPaths),
+    );
     settings.hooks.UserPromptSubmit = [
-      ...settings.hooks.UserPromptSubmit.filter((entry: unknown) => !isRouterHook(entry)),
+      ...settings.hooks.UserPromptSubmit.filter((entry: unknown) => !isRouterHook(entry, expectedPaths)),
       {
         matcher: '',
         hooks: [{ type: 'command', command: getHookCommand() }],
@@ -141,7 +110,7 @@ export function handleInit(args: string[]): void {
   }
 }
 
-export function handleRemove(args: string[]): void {
+export function handleRemove(args: string[], expectedPaths?: readonly string[]): void {
   try {
     console.log('ClaudeRouter remove\n');
 
@@ -153,7 +122,7 @@ export function handleRemove(args: string[]): void {
 
       if (settings.hooks && Array.isArray(settings.hooks.UserPromptSubmit)) {
         settings.hooks.UserPromptSubmit = settings.hooks.UserPromptSubmit.filter(
-          (entry: unknown) => !isRouterHook(entry),
+          (entry: unknown) => !isRouterHook(entry, expectedPaths),
         );
 
         if (settings.hooks.UserPromptSubmit.length === 0) {

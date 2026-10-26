@@ -1,8 +1,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { getHookPath, isRouterHook } from './hook-path';
 
-interface Check {
+export interface Check {
   label: string;
   pass: boolean;
   detail?: string;
@@ -17,14 +18,6 @@ function checkNodeVersion(): Check {
   };
 }
 
-function getHookPath(): string {
-  return path.resolve(__dirname, '..', '..', 'dist', 'hooks', 'user-prompt-submit.js');
-}
-
-function getHookCommand(): string {
-  return `node \"${getHookPath()}\"`;
-}
-
 function checkHookScript(): Check {
   const hookPath = getHookPath();
   const exists = fs.existsSync(hookPath);
@@ -35,29 +28,18 @@ function checkHookScript(): Check {
   };
 }
 
-function checkHookRegistered(): Check {
+export function checkHookRegistered(expectedPaths?: readonly string[]): Check {
   const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
   try {
     const settings: unknown = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
     const hooks = typeof settings === 'object' && settings !== null
       ? (settings as { hooks?: { UserPromptSubmit?: unknown } }).hooks?.UserPromptSubmit
       : undefined;
-    const hasRouterCommand = (value: unknown): boolean => {
-      const command = typeof value === 'object' && value !== null
-        ? (value as { command?: unknown }).command
-        : undefined;
-      return typeof command === 'string' && (command === getHookCommand() || command.includes(getHookPath()));
-    };
-    const found = Array.isArray(hooks) && hooks.some((entry) => {
-      if (hasRouterCommand(entry)) {
-        return true;
-      }
-
-      const nestedHooks = typeof entry === 'object' && entry !== null
-        ? (entry as { hooks?: unknown }).hooks
-        : undefined;
-      return Array.isArray(nestedHooks) && nestedHooks.some(hasRouterCommand);
-    });
+    // The label says "Node hook", so a legacy shell hook must not satisfy it.
+    const expected = expectedPaths ?? [getHookPath()];
+    const found = Array.isArray(hooks) && hooks.some(
+      (entry: unknown) => isRouterHook(entry, expected)
+    );
 
     return found
       ? { label: 'Node hook registered in ~/.claude/settings.json', pass: true }

@@ -18,6 +18,7 @@ vi.mock('os', async (importOriginal) => {
 });
 
 import { handleInit, handleRemove } from '../../src/cli/init';
+import { getHookPath } from '../../src/cli/hook-path';
 
 let tmpDir: string;
 let homeDir: string;
@@ -37,6 +38,7 @@ beforeEach(() => {
 
 afterEach(() => {
   rmSync(tmpDir, { recursive: true, force: true });
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
 
@@ -70,6 +72,26 @@ function hasCommand(settings: any, command: string): boolean {
 
 function claudeMdPath(): string {
   return path.join(projectDir, 'CLAUDE.md');
+}
+
+function writeUserPromptSubmit(entries: any[]): void {
+  const dir = path.dirname(settingsPath());
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    settingsPath(),
+    JSON.stringify({ hooks: { UserPromptSubmit: entries } }, null, 2),
+    'utf-8'
+  );
+}
+
+/** The hook path the tests expect the router hook to resolve to. */
+function expectedHookPath(): string {
+  return path.join(homeDir, 'dist', 'hooks', 'user-prompt-submit.js');
+}
+
+function routerHookCommands(settings: any): string[] {
+  return routerHookEntries(settings)
+    .flatMap((entry: any) => entry.hooks.map((hook: any) => hook.command));
 }
 
 describe('install/uninstall e2e', () => {
@@ -272,6 +294,78 @@ describe('install/uninstall e2e', () => {
       handleInit([projectDir]);
       const settings = readSettings();
       expect(settings.hooks).toBeDefined();
+    });
+  });
+
+  describe('hook path variants', () => {
+    it('init replaces an existing $HOME-form hook entry with the absolute path', () => {
+      writeUserPromptSubmit([
+        {
+          matcher: '',
+          hooks: [{ type: 'command', command: 'node "$HOME/dist/hooks/user-prompt-submit.js"' }],
+        },
+      ]);
+
+      handleInit([projectDir], [expectedHookPath()]);
+
+      const commands = routerHookCommands(readSettings());
+      expect(commands).toEqual([`node "${getHookPath()}"`]);
+      expect(commands.some((c: string) => c.includes('$HOME'))).toBe(false);
+    });
+
+    it('init replaces an existing ${CLAUDE_PLUGIN_ROOT}-form hook entry with the absolute path', () => {
+      vi.stubEnv('CLAUDE_PLUGIN_ROOT', homeDir);
+      writeUserPromptSubmit([
+        {
+          matcher: '',
+          hooks: [{ type: 'command', command: 'node "${CLAUDE_PLUGIN_ROOT}/dist/hooks/user-prompt-submit.js"' }],
+        },
+      ]);
+
+      handleInit([projectDir], [expectedHookPath()]);
+
+      const commands = routerHookCommands(readSettings());
+      expect(commands).toEqual([`node "${getHookPath()}"`]);
+      expect(commands.some((c: string) => c.includes('CLAUDE_PLUGIN_ROOT'))).toBe(false);
+    });
+
+    it('init keeps a same-named hook belonging to another package', () => {
+      const otherCommand = 'node "/other/package/dist/hooks/user-prompt-submit.js"';
+      writeUserPromptSubmit([
+        { matcher: '', hooks: [{ type: 'command', command: otherCommand }] },
+      ]);
+
+      handleInit([projectDir], [expectedHookPath()]);
+
+      const settings = readSettings();
+      expect(userPromptSubmitHooks(settings).length).toBe(2);
+      expect(hasCommand(settings, otherCommand)).toBe(true);
+    });
+
+    it('remove deletes a $HOME-form hook entry', () => {
+      writeUserPromptSubmit([
+        {
+          matcher: '',
+          hooks: [{ type: 'command', command: 'node "$HOME/dist/hooks/user-prompt-submit.js"' }],
+        },
+      ]);
+
+      handleRemove([projectDir], [expectedHookPath()]);
+
+      expect(userPromptSubmitHooks(readSettings()).length).toBe(0);
+    });
+
+    it('remove keeps a same-named hook belonging to another package', () => {
+      const otherCommand = 'node "/other/package/dist/hooks/user-prompt-submit.js"';
+      writeUserPromptSubmit([
+        { matcher: '', hooks: [{ type: 'command', command: otherCommand }] },
+      ]);
+
+      handleRemove([projectDir], [expectedHookPath()]);
+
+      const settings = readSettings();
+      expect(userPromptSubmitHooks(settings).length).toBe(1);
+      expect(hasCommand(settings, otherCommand)).toBe(true);
     });
   });
 });
