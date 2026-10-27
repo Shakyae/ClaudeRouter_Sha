@@ -23,6 +23,8 @@ export interface RoutingDecision {
   tier: Tier;
   source: RoutingSource;
   execution: ExecutionConfig;
+  /** Planned fallback models, derived from lower tiers; not a claim about what ran. */
+  fallbacks?: string[];
   directive: string | null;
   classifierModel?: string;
   classifierRequestModel?: string;

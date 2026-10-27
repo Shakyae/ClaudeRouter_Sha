@@ -127,6 +127,14 @@ describe('install/uninstall e2e', () => {
       expect(content).toContain('<!-- claude-router:end -->');
     });
 
+    it('fresh install → CLAUDE.md documents the delegation fallback rules', () => {
+      handleInit([projectDir]);
+      const content = fs.readFileSync(claudeMdPath(), 'utf-8');
+      expect(content).toContain('When the delegation itself fails');
+      expect(content).toContain('usage_limit_reached');
+      expect(content).toContain('at most once each');
+    });
+
     it('install with existing settings.json with other hooks → other hooks preserved', () => {
       const dir = path.dirname(settingsPath());
       fs.mkdirSync(dir, { recursive: true });

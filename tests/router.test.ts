@@ -156,6 +156,61 @@ describe('route', () => {
   });
 });
 
+describe('fallback chain in route decisions', () => {
+  it('derives the chain from lower tiers on the classifier path', async () => {
+    classifyAs('COMPLEX');
+
+    const decision = await route('ordinary task', DEFAULT_CONFIG);
+
+    expect(decision.fallbacks).toEqual(['sonnet', 'haiku']);
+    expect(decision.directive).toContain('retry the same task once each with "sonnet", then "haiku", in that order');
+  });
+
+  it('derives the chain on the override path', async () => {
+    const decision = await route('//complex inspect the race condition', DEFAULT_CONFIG);
+
+    expect(decision.source).toBe('override');
+    expect(decision.fallbacks).toEqual(['sonnet', 'haiku']);
+    expect(decision.directive).toContain('with "sonnet", then "haiku"');
+  });
+
+  it('derives the chain on the classifier failure path', async () => {
+    mockClassify.mockRejectedValueOnce(new Error('boom'));
+    const config = mergeConfig(DEFAULT_CONFIG, { fallback_tier: 'COMPLEX' });
+
+    const decision = await route('ordinary task', config);
+
+    expect(decision.source).toBe('fallback');
+    expect(decision.tier).toBe('COMPLEX');
+    expect(decision.fallbacks).toEqual(['sonnet', 'haiku']);
+  });
+
+  it('derives the chain from the effective tier under conservative mode', async () => {
+    classifyAs('STANDARD');
+    const config = mergeConfig(DEFAULT_CONFIG, { conservative: true });
+
+    const decision = await route('ordinary task', config);
+
+    expect(decision.tier).toBe('COMPLEX');
+    expect(decision.fallbacks).toEqual(['sonnet', 'haiku']);
+    expect(decision.directive).toContain('model "opus"');
+    expect(decision.directive).toContain('with "sonnet", then "haiku"');
+  });
+
+  it('emits no chain for SIMPLE and no directive for direct execution', async () => {
+    classifyAs('SIMPLE');
+    const simple = await route('ordinary task', DEFAULT_CONFIG);
+    expect(simple.fallbacks).toEqual([]);
+    expect(simple.directive).not.toContain('retry the same task');
+
+    classifyAs('STANDARD');
+    const directConfig = mergeConfig(DEFAULT_CONFIG, { tiers: { STANDARD: { mode: 'direct' } } });
+    const direct = await route('ordinary task', directConfig);
+    expect(direct.fallbacks).toEqual([]);
+    expect(direct.directive).toBeNull();
+  });
+});
+
 describe('buildDirective', () => {
   it('emits no directive for direct execution', () => {
     expect(buildDirective('STANDARD', { mode: 'direct' })).toBeNull();
@@ -164,6 +219,18 @@ describe('buildDirective', () => {
   it('emits the effective tier and configured delegate model in a stable format', () => {
     expect(buildDirective('COMPLEX', { mode: 'delegate', model: 'arbitrary-alias' })).toBe(
       '[ROUTER] Complexity: COMPLEX. Delegate the entire task to a subagent using model "arbitrary-alias". Let the subagent inspect and modify the repository as needed. After it finishes, do not redo the implementation independently.',
+    );
+  });
+
+  it('keeps the empty-chain directive byte-identical to the two-argument form', () => {
+    expect(buildDirective('COMPLEX', { mode: 'delegate', model: 'arbitrary-alias' }, [])).toBe(
+      buildDirective('COMPLEX', { mode: 'delegate', model: 'arbitrary-alias' }),
+    );
+  });
+
+  it('appends the fallback instruction after the no-redo rule', () => {
+    expect(buildDirective('COMPLEX', { mode: 'delegate', model: 'opus' }, ['sonnet', 'haiku'])).toBe(
+      '[ROUTER] Complexity: COMPLEX. Delegate the entire task to a subagent using model "opus". Let the subagent inspect and modify the repository as needed. After it finishes, do not redo the implementation independently. If the delegation itself fails because that model is unavailable, retry the same task once each with "sonnet", then "haiku", in that order; retrying a failed delegation is not a redo. If every model fails, stop and report the errors. If a fallback model completed the task, tell the user which model actually ran it.',
     );
   });
 });

@@ -132,6 +132,13 @@ describe('config loading', () => {
     expect(loadConfig(projectDir).tiers.STANDARD).toEqual({ mode: 'delegate', model: 'sonnet' });
   });
 
+  it('ignores a delegate model that would break the directive', () => {
+    for (const model of ['bad"alias', 'bad\\alias', 'bad\nalias']) {
+      writeConfig(projectDir, { tiers: { COMPLEX: { mode: 'delegate', model } } });
+      expect(loadConfig(projectDir).tiers.COMPLEX).toEqual({ mode: 'delegate', model: 'opus' });
+    }
+  });
+
   it('ignores an invalid fallback tier', () => {
     writeConfig(projectDir, { fallback_tier: 'HIGH' });
 

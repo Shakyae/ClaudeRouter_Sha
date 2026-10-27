@@ -99,7 +99,15 @@ function parseExecution(value: unknown, key: string): ExecutionConfig | null {
   }
 
   if (value.mode === 'delegate' && typeof value.model === 'string' && value.model.trim()) {
-    return { mode: 'delegate', model: value.model.trim() };
+    const model = value.model.trim();
+    // The model name is interpolated into the [ROUTER] directive and into the
+    // fallback chain, so quotes, backslashes, and control characters are
+    // rejected to keep the directive well-formed.
+    if (/["\\\u0000-\u001f\u007f]/.test(model)) {
+      warn(`${key}.model contains quotes, backslashes, or control characters; ignoring it`);
+      return null;
+    }
+    return { mode: 'delegate', model };
   }
 
   warn(`${key} must be { mode: "direct" } or { mode: "delegate", model: "..." }; ignoring it`);

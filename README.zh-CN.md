@@ -82,7 +82,7 @@ claude-router stats
 1. **同步信号** — `quickClassify()` 仅识别置信度高的情况。`yes`、`ok`、`continue` 等跟进提示保持为 `STANDARD`；提示长度本身不会提升任务复杂度。
 2. **分类器模型** — 未被信号规则判定的提示由 `classifier.model` 分类。
 3. **回退** — 分类器失败、超时或响应无效时，使用 `fallback_tier`。
-4. **按配置执行** — 根据最终档位查询 `tiers`。`direct` 档位不产生 directive；`delegate` 档位会生成包含已配置模型别名的 `[ROUTER]` directive。
+4. **按配置执行** — 根据最终档位查询 `tiers`。`direct` 档位不产生 directive；`delegate` 档位会生成包含已配置模型别名的 `[ROUTER]` directive，以及由更低档位推导出的[降级链](#委派降级链)。
 
 四个有序档位如下：
 
@@ -103,6 +103,29 @@ claude-router stats
 | `EXTREME` | 使用 `fable` 执行 `delegate` |
 
 以上是默认值，不是固定的模型策略。任何档位（包括 `STANDARD`）都可以通过配置设为 `direct` 或 `delegate`。
+
+## 委派降级链
+
+档位执行 `delegate` 时，`[ROUTER]` 指令会附带一条由更低档位推导出的降级链。如果被委派的模型不可用，主 agent 会按链上顺序用下一个模型重试同一个任务（每个模型一次），并如实告知最终是哪个模型完成了任务。
+
+| 档位 | 主模型 | 降级链 |
+|------|--------|--------|
+| `SIMPLE` | `haiku` | 无 |
+| `STANDARD` | `sonnet` | `haiku` |
+| `COMPLEX` | `opus` | `sonnet`、`haiku` |
+| `EXTREME` | `fable` | `opus`、`sonnet`、`haiku` |
+
+降级链是推导出来的，不是配置出来的：
+
+- 配置为 `direct` 的低档位会被跳过。把 `tiers.STANDARD` 设为 `direct`，`COMPLEX` 的链就只剩 `haiku`。
+- 与主模型相同、或与链中前序条目重复的模型会被去掉。比较时忽略大小写、首尾空白和结尾的 `[1M]` 标记；输出保留配置里的原始写法。
+- 降级链是「计划」而不是「记录」：它不代表某个降级模型真的跑过，也无法证明别名最终解析成了哪个 Provider 模型。
+
+降级链的前提是各别名指向相互独立的后端。如果所有别名都解析到同一个已耗尽额度的账号，逐个重试同样会失败。
+
+### 与 `fallbackModel` 的分工
+
+不要为这个功能开启 Claude Code 的 `fallbackModel`。它只在「别名解析不到」时生效，换模型是静默的，对额度耗尽和网关拒绝无效，反而会让「实际用了哪个模型」的报告失准。上面的降级链覆盖了「模型存在但不可用」的场景，并且总会告知用户实际运行的模型。
 
 ## 配置
 
@@ -320,7 +343,7 @@ ClaudeRouter 采用 fail-open 设计，不会有意阻止 Claude Code：
 - 发生回退时，Hook 会在 `[ROUTER]` 指令之外输出 `systemMessage`（在 Claude Code 界面可见）。同一失败类型最多每 60 秒提示一次。
 - 如果 Provider 返回了可读原因，`systemMessage` 会一并展示，例如 `ClaudeRouter: classifier HTTP 503 (当前集群负载较高); fell back to STANDARD, model MiniMax-M3.`。响应体中的 message 优先于 SDK 的通用 `message`；原因会合并空白、截断到 300 个字符，并将 `Bearer` token 和 `sk-...` key 脱敏。同样的值会写入 `events.jsonl` 和 `debug.jsonl` 的 `classifier_error` 字段。
 - Hook 解析、配置、遥测和调试错误会导致不输出 directive，并以成功状态退出。
-- `is_subagent: true` 会阻止对子 agent 递归执行路由。
+- 输入中带有 `agent_id`（UserPromptSubmit 的官方字段）或旧版的 `is_subagent: true` 时，会阻止对子 agent 递归执行路由。
 - `direct` 执行方式有意不产生 directive，任务继续由主 agent 处理。
 
 ## 故障排查

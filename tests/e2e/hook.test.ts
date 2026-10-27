@@ -121,6 +121,7 @@ describe('Node UserPromptSubmit hook', () => {
 
   it('preserves the subagent recursion guard and ignores invalid payloads', async () => {
     await expect(processHookInput({ prompt: 'task', is_subagent: true })).resolves.toBe('');
+    await expect(processHookInput({ prompt: 'task', agent_id: 'agent-123' })).resolves.toBe('');
     await expect(processHookInput({ prompt: '   ' })).resolves.toBe('');
     await expect(processHookInput({})).resolves.toBe('');
     await expect(processHookInput(null)).resolves.toBe('');
@@ -128,6 +129,34 @@ describe('Node UserPromptSubmit hook', () => {
     expect(mockLoadConfig).not.toHaveBeenCalled();
     expect(mockRoute).not.toHaveBeenCalled();
     expect(mockLogDecision).not.toHaveBeenCalled();
+  });
+
+  it('routes main-agent payloads that carry an empty agent_id', async () => {
+    await expect(processHookInput({ prompt: 'task', agent_id: '' })).resolves.toBe(decision().directive);
+  });
+
+  it('passes the fallback chain through inside the directive unchanged', async () => {
+    const withChain = decision({
+      tier: 'COMPLEX',
+      execution: { mode: 'delegate', model: 'opus' },
+      fallbacks: ['sonnet', 'haiku'],
+      directive: '[ROUTER] Complexity: COMPLEX. ... with "sonnet", then "haiku", in that order.',
+    });
+    mockRoute.mockResolvedValueOnce(withChain);
+
+    const output = await handleHookInput({ prompt: 'inspect the race condition' });
+
+    expect(output).toEqual({ additionalContext: withChain.directive });
+    expect(output.additionalContext).toContain('"sonnet", then "haiku"');
+  });
+
+  it('adds no extra output for an empty chain', async () => {
+    mockRoute.mockResolvedValueOnce(decision({ fallbacks: [] }));
+
+    const output = await handleHookInput({ prompt: 'find the function' });
+
+    expect(output).toEqual({ additionalContext: decision().directive });
+    expect(serializeHookOutput(output)).toBe(decision().directive);
   });
 
   it('fails open for configuration and routing errors', async () => {

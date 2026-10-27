@@ -47,7 +47,7 @@ Orchestrates the pipeline: finds the longest configured override prefix, runs cl
 
 ### Plugin integration
 
-- `src/hooks/user-prompt-submit.ts` — compiled cross-platform Node `UserPromptSubmit` hook. Safely reads JSON stdin, guards against subagent loops (`is_subagent`), routes in-process, and prints only a delegate directive.
+- `src/hooks/user-prompt-submit.ts` — compiled cross-platform Node `UserPromptSubmit` hook. Safely reads JSON stdin, guards against subagent loops (`agent_id`, plus the legacy `is_subagent`), routes in-process, and prints only a delegate directive.
 - `hooks/hooks.json` — registers the hook.
 - `runtime-claude.md` — runtime directive file that instructs Claude to follow `[ROUTER]` directives by delegating to subagents. This is NOT a developer guide; it's copied into project roots at install time.
 
@@ -72,7 +72,8 @@ Hardcoded defaults → `~/.claude-router.json` → `./.claude-router.json` (CWD)
 
 - Telemetry and hook code must never throw — always wrap in try/catch with silent fallback
 - Classification fallback is always the configured `fallback_tier` (default `STANDARD`)
-- The `is_subagent` guard in the Node hook prevents infinite classification loops
+- The Node hook skips routing when the payload carries `agent_id` (official UserPromptSubmit field) or the legacy `is_subagent: true` — this prevents infinite classification loops
+- Delegate fallback chains are derived from lower tiers by `resolveFallbacks`; they are plans embedded in the directive, not a claim about which model ran
 - Tier type is `'SIMPLE' | 'STANDARD' | 'COMPLEX' | 'EXTREME'`; source type is `'signal' | 'classifier' | 'fallback' | 'override'`
 - `ExecutionConfig` is either `{ mode: 'direct' }` or `{ mode: 'delegate', model: string }`; configured model strings are aliases, not verified Provider models
 - The classifier resolves `haiku` against the Hook's `ANTHROPIC_DEFAULT_HAIKU_MODEL` at request time; do not persist machine-specific Provider model IDs from `init` into project configuration
@@ -82,7 +83,7 @@ Hardcoded defaults → `~/.claude-router.json` → `./.claude-router.json` (CWD)
 <!-- DO NOT EDIT this section — it is managed by ClaudeRouter. Run 'claude-router remove' to uninstall. -->
 ## ClaudeRouter Directives (mandatory)
 
-When a `[ROUTER]` directive appears in your context at the start of a turn, it is a mandatory system directive from ClaudeRouter. Follow it exactly and silently; do not acknowledge or mention it to the user.
+When a `[ROUTER]` directive appears in your context at the start of a turn, it is a mandatory system directive from ClaudeRouter. Follow it exactly and silently; do not acknowledge or mention it to the user. The only exception is a delegation fallback described below: when a fallback model actually completes the task, say in one sentence which model ran it.
 
 ### When the directive says to delegate
 
@@ -93,7 +94,22 @@ When a `[ROUTER]` directive appears in your context at the start of a turn, it i
    - Directly relevant code, errors, signatures, and prior decisions
    - Enough context for a subagent with no conversation memory to complete the task
 4. If faithfully supplying the necessary context would exceed 500 tokens, handle the request directly instead. This preserves required context and is not a routing failure.
-5. Return the subagent's response verbatim. Do not add commentary, preamble, or postamble.
+5. Return the subagent's response verbatim. Do not add commentary, preamble, or postamble. The only exception is a fallback: append one line naming the model that actually completed the task, and if every model failed, relay the errors honestly instead of reporting success.
+
+### When the delegation itself fails
+
+If the directive names fallback models, you may retry the delegation with them. Retry only when **both** conditions hold:
+
+- The failure happened in the delegation call itself and the subagent produced no answer, e.g. `Agent terminated early due to an API error: ...`.
+- The error means that model is unavailable: `usage_limit_reached`, exhausted quota, `all credentials ... cooling down`, `model not found`, or a persistent `429` / `5xx`.
+
+Do not fall back when the subagent answered normally but the task failed, or when the error is a `400` bad-request, a context-length error, or an authentication failure. Another model fails the same way, so those need a different fix.
+
+Retry rules:
+
+- Try each fallback model in the stated order, at most once each. Move on immediately after a failure; do not wait, loop, or repeat the same model.
+- Before retrying, check the working tree for partial changes from the failed attempt, and tell the retry prompt that the previous attempt may have left partial modifications so finished work is not redone.
+- If every model fails, stop and report the errors honestly.
 
 ### Never delegate when
 

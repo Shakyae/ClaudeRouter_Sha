@@ -82,7 +82,7 @@ claude-router stats
 1. **Synchronous signals** — `quickClassify()` recognizes only high-confidence cases. Follow-ups such as `yes`, `ok`, and `continue` remain `STANDARD`; prompt length alone never escalates a task.
 2. **Classifier model** — prompts not resolved by signals are classified by `classifier.model`.
 3. **Fallback** — classifier failures, timeouts, and invalid responses return `fallback_tier`.
-4. **Configured execution** — the effective tier is looked up in `tiers`. A `direct` tier yields no directive; a `delegate` tier yields a `[ROUTER]` directive containing its configured model alias.
+4. **Configured execution** — the effective tier is looked up in `tiers`. A `direct` tier yields no directive; a `delegate` tier yields a `[ROUTER]` directive containing its configured model alias and a [fallback chain](#delegate-fallback-chain) derived from the lower tiers.
 
 The four ordered tiers are:
 
@@ -103,6 +103,29 @@ The four ordered tiers are:
 | `EXTREME` | `delegate` using `fable` |
 
 These are defaults, not fixed model policy. Any tier, including `STANDARD`, can be `direct` or `delegate` through configuration.
+
+## Delegate fallback chain
+
+When a tier delegates, the `[ROUTER]` directive also carries a fallback chain derived from the lower tiers. If the delegated model is unavailable, the main agent retries the same task with the next model in the chain, one attempt each, and reports which model actually ran the task.
+
+| Tier | Main model | Fallback chain |
+|------|------------|----------------|
+| `SIMPLE` | `haiku` | — |
+| `STANDARD` | `sonnet` | `haiku` |
+| `COMPLEX` | `opus` | `sonnet`, `haiku` |
+| `EXTREME` | `fable` | `opus`, `sonnet`, `haiku` |
+
+The chain is derived, not configured:
+
+- A lower tier configured as `direct` is skipped, so setting `tiers.STANDARD` to `direct` shortens the `COMPLEX` chain to `haiku`.
+- A model that is already the main model, or that repeats an earlier chain entry, is removed. Comparison ignores case, surrounding whitespace, and a trailing `[1M]` marker; the chain keeps the spelling from the configuration.
+- The chain is a plan, not a record. It does not mean a fallback model ran, and it does not prove which Provider model any alias resolves to.
+
+The chain assumes the aliases point at independent backends. If every alias resolves to the same exhausted account, retrying is expected to fail as well.
+
+### Relationship with `fallbackModel`
+
+Do not enable Claude Code's `fallbackModel` for this purpose. It only applies when a model alias cannot be resolved, it switches models silently, and it does nothing for an exhausted quota or a rejected request — while making the reported "actual model" inaccurate. The chain above covers the unavailable-model case and always tells the user which model ran.
 
 ## Configuration
 
@@ -320,7 +343,7 @@ ClaudeRouter is fail-open and never intentionally blocks Claude Code:
 - When a fallback happens, the Hook prints a `systemMessage` (shown in the Claude Code UI) alongside the `[ROUTER]` directive. The same failure type is announced at most once per 60 seconds.
 - The `systemMessage` includes the Provider's own reason when one is available, e.g. `ClaudeRouter: classifier HTTP 503 (当前集群负载较高); fell back to STANDARD, model MiniMax-M3.` Response-body messages take precedence over the SDK's generic `message`; the reason is whitespace-collapsed, truncated to 300 characters, and has `Bearer` tokens and `sk-...` keys redacted. The same value is written to `classifier_error` in `events.jsonl` and `debug.jsonl`.
 - Hook parsing, configuration, telemetry, and debug errors produce no directive and exit successfully.
-- `is_subagent: true` prevents recursive hook routing for subagents.
+- A payload carrying `agent_id` (the official UserPromptSubmit field) or the legacy `is_subagent: true` prevents recursive hook routing for subagents.
 - A `direct` execution deliberately emits no directive, leaving the task with the main agent.
 
 ## Troubleshooting

@@ -12,7 +12,10 @@ import type { ClassifierFailure, RoutingDecision } from '../types';
 interface HookInput {
   prompt: string;
   cwd?: string;
+  /** Legacy self-declared flag; kept for older payloads and fixtures. */
   is_subagent?: boolean;
+  /** Official UserPromptSubmit field identifying a subagent turn. */
+  agent_id?: string;
 }
 
 export interface HookOutput {
@@ -37,6 +40,7 @@ function parseHookInput(value: unknown): HookInput | null {
     prompt: value.prompt,
     ...(typeof value.cwd === 'string' && value.cwd.trim() ? { cwd: value.cwd } : {}),
     ...(value.is_subagent === true ? { is_subagent: true } : {}),
+    ...(typeof value.agent_id === 'string' && value.agent_id.trim() ? { agent_id: value.agent_id } : {}),
   };
 }
 
@@ -176,7 +180,7 @@ function buildOutput(decision: RoutingDecision): HookOutput {
 
 export async function handleHookInput(value: unknown): Promise<HookOutput> {
   const input = parseHookInput(value);
-  if (!input || input.is_subagent) {
+  if (!input || input.is_subagent || input.agent_id !== undefined) {
     return { additionalContext: '' };
   }
 

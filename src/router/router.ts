@@ -2,21 +2,30 @@ import { classify } from '../classifier/classifier';
 import { getClassifierErrorDetail } from '../redact';
 import type { ExecutionConfig, RoutingDecision, Tier } from '../types';
 import type { RouterConfig } from './config';
-import { resolveExecution, shiftUp } from './model-map';
+import { resolveExecution, resolveFallbacks, shiftUp } from './model-map';
 
 export type { RoutingDecision } from '../types';
 
-export function buildDirective(tier: Tier, execution: ExecutionConfig): string | null {
+export function buildDirective(tier: Tier, execution: ExecutionConfig, fallbacks: string[] = []): string | null {
   if (execution.mode === 'direct') {
     return null;
   }
 
-  return [
+  const sentences = [
     `[ROUTER] Complexity: ${tier}.`,
     `Delegate the entire task to a subagent using model "${execution.model}".`,
     'Let the subagent inspect and modify the repository as needed.',
     'After it finishes, do not redo the implementation independently.',
-  ].join(' ');
+  ];
+
+  if (fallbacks.length > 0) {
+    const chain = fallbacks.map((model) => `"${model}"`).join(', then ');
+    sentences.push(
+      `If the delegation itself fails because that model is unavailable, retry the same task once each with ${chain}, in that order; retrying a failed delegation is not a redo. If every model fails, stop and report the errors. If a fallback model completed the task, tell the user which model actually ran it.`,
+    );
+  }
+
+  return sentences.join(' ');
 }
 
 function findOverride(prompt: string, config: RouterConfig): { tier: Tier; strippedPrompt: string } | null {
@@ -50,11 +59,13 @@ export async function route(prompt: string, config: RouterConfig): Promise<Routi
   if (override) {
     const tier = effectiveTier(override.tier, config);
     const execution = resolveExecution(override.tier, config);
+    const fallbacks = resolveFallbacks(tier, config);
     return {
       tier,
       source: 'override',
       execution,
-      directive: buildDirective(tier, execution),
+      fallbacks,
+      directive: buildDirective(tier, execution, fallbacks),
       latencyMs: Date.now() - start,
       strippedPrompt: override.strippedPrompt,
     };
@@ -64,12 +75,14 @@ export async function route(prompt: string, config: RouterConfig): Promise<Routi
     const classification = await classify(prompt, config);
     const tier = effectiveTier(classification.tier, config);
     const execution = resolveExecution(classification.tier, config);
+    const fallbacks = resolveFallbacks(tier, config);
 
     return {
       tier,
       source: classification.source,
       execution,
-      directive: buildDirective(tier, execution),
+      fallbacks,
+      directive: buildDirective(tier, execution, fallbacks),
       classifierModel: classification.classifierModel,
       classifierRequestModel: classification.classifierRequestModel,
       classifierFailure: classification.classifierFailure,
@@ -82,12 +95,14 @@ export async function route(prompt: string, config: RouterConfig): Promise<Routi
   } catch (error) {
     const tier = effectiveTier(config.fallback_tier, config);
     const execution = resolveExecution(config.fallback_tier, config);
+    const fallbacks = resolveFallbacks(tier, config);
     const classifierError = getClassifierErrorDetail(error);
     return {
       tier,
       source: 'fallback',
       execution,
-      directive: buildDirective(tier, execution),
+      fallbacks,
+      directive: buildDirective(tier, execution, fallbacks),
       classifierFailure: 'request_error',
       ...(classifierError ? { classifierError } : {}),
       latencyMs: Date.now() - start,

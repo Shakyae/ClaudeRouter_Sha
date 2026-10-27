@@ -19,6 +19,17 @@ vi.mock('@anthropic-ai/sdk', () => ({
 
 const defaultConfig = DEFAULT_CONFIG;
 
+function tierIndexForModel(model: string): number {
+  const key = model.trim().replace(/(\[1m\])+$/i, '').toLowerCase();
+  for (const tier of TIERS) {
+    const execution = defaultConfig.tiers[tier];
+    if (execution.mode === 'delegate' && execution.model.toLowerCase() === key) {
+      return TIERS.indexOf(tier);
+    }
+  }
+  return -1;
+}
+
 function validateShape(decision: RoutingDecision): void {
   expect(TIERS).toContain(decision.tier);
   expect(['signal', 'classifier', 'fallback', 'override']).toContain(decision.source);
@@ -31,6 +42,24 @@ function validateShape(decision: RoutingDecision): void {
     expect(decision.directive).toContain(`model \"${decision.execution.model}\"`);
   } else {
     expect(decision.directive).toBeNull();
+  }
+
+  const fallbacks = decision.fallbacks ?? [];
+  expect(fallbacks.length).toBeLessThanOrEqual(TIERS.length - 1);
+  if (decision.execution.mode === 'delegate') {
+    expect(fallbacks).not.toContain(decision.execution.model);
+  } else {
+    expect(fallbacks).toEqual([]);
+  }
+
+  let previousIndex = TIERS.indexOf(decision.tier);
+  for (const model of fallbacks) {
+    expect(typeof model).toBe('string');
+    expect(model.trim()).not.toBe('');
+    const index = tierIndexForModel(model);
+    expect(index).toBeGreaterThanOrEqual(0);
+    expect(index).toBeLessThan(previousIndex);
+    previousIndex = index;
   }
 }
 

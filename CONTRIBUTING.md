@@ -43,7 +43,10 @@ node dist/hooks/user-prompt-submit.js
 Feed this program a JSON payload using your platform's standard stdin mechanism, for example:
 
 ```json
-{"prompt":"find calculatePrice","is_subagent":false}
+{"prompt":"find calculatePrice"}
+```
+
+A payload carrying `agent_id` (official UserPromptSubmit field) or legacy `is_subagent: true` is treated as a subagent turn and is not routed:
 ```
 
 The hook must remain independent of `bash`, `sh`, `jq`, `grep`, `sed`, `awk`, `stat`, and `/tmp`. Test the public API without a shell pipeline when convenient:
