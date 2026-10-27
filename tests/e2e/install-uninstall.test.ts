@@ -18,7 +18,7 @@ vi.mock('os', async (importOriginal) => {
 });
 
 import { handleInit, handleRemove } from '../../src/cli/init';
-import { getHookPath } from '../../src/cli/hook-path';
+import { getHookCommand, getHookPath, getLegacyHookPath } from '../../src/cli/hook-path';
 
 let tmpDir: string;
 let homeDir: string;
@@ -106,9 +106,12 @@ describe('install/uninstall e2e', () => {
         matcher: '',
         hooks: [{
           type: 'command',
-          command: expect.stringMatching(/^node \".+[\\/]dist[\\/]hooks[\\/]user-prompt-submit\.js\"$/),
+          command: getHookCommand(),
         }],
       });
+      expect(routerHooks[0].hooks[0].command).toMatch(
+        /^node ".+[\\/]dist[\\/]hooks[\\/]user-prompt-submit\.js"$/,
+      );
     });
 
     it('fresh install → ClaudeRouter section includes effective tier propagation', () => {
@@ -306,35 +309,152 @@ describe('install/uninstall e2e', () => {
   });
 
   describe('hook path variants', () => {
-    it('init replaces an existing $HOME-form hook entry with the absolute path', () => {
-      writeUserPromptSubmit([
-        {
-          matcher: '',
-          hooks: [{ type: 'command', command: 'node "$HOME/dist/hooks/user-prompt-submit.js"' }],
-        },
-      ]);
+    it('init preserves an existing $HOME-form hook entry verbatim', () => {
+      const command = 'node "$HOME/dist/hooks/user-prompt-submit.js"';
+      writeUserPromptSubmit([{ matcher: '', hooks: [{ type: 'command', command }] }]);
 
       handleInit([projectDir], [expectedHookPath()]);
 
-      const commands = routerHookCommands(readSettings());
-      expect(commands).toEqual([`node "${getHookPath()}"`]);
-      expect(commands.some((c: string) => c.includes('$HOME'))).toBe(false);
+      expect(routerHookCommands(readSettings())).toEqual([command]);
+      expect(userPromptSubmitHooks(readSettings())).toHaveLength(1);
     });
 
-    it('init replaces an existing ${CLAUDE_PLUGIN_ROOT}-form hook entry with the absolute path', () => {
+    it('init preserves an existing ${CLAUDE_PLUGIN_ROOT}-form hook entry verbatim', () => {
       vi.stubEnv('CLAUDE_PLUGIN_ROOT', homeDir);
+      const command = 'node "${CLAUDE_PLUGIN_ROOT}/dist/hooks/user-prompt-submit.js"';
+      writeUserPromptSubmit([{ matcher: '', hooks: [{ type: 'command', command }] }]);
+
+      handleInit([projectDir], [expectedHookPath()]);
+
+      expect(routerHookCommands(readSettings())).toEqual([command]);
+      expect(userPromptSubmitHooks(readSettings())).toHaveLength(1);
+    });
+
+    it('init keeps sibling hooks in the same entry as an existing Node hook', () => {
+      const routerCommand = 'node "$HOME/dist/hooks/user-prompt-submit.js"';
+      const siblingCommand = 'curl -s -X POST http://127.0.0.1:8080/event';
       writeUserPromptSubmit([
         {
           matcher: '',
-          hooks: [{ type: 'command', command: 'node "${CLAUDE_PLUGIN_ROOT}/dist/hooks/user-prompt-submit.js"' }],
+          hooks: [
+            { type: 'command', command: routerCommand },
+            { type: 'command', command: siblingCommand },
+          ],
         },
       ]);
 
       handleInit([projectDir], [expectedHookPath()]);
 
-      const commands = routerHookCommands(readSettings());
-      expect(commands).toEqual([`node "${getHookPath()}"`]);
-      expect(commands.some((c: string) => c.includes('CLAUDE_PLUGIN_ROOT'))).toBe(false);
+      const settings = readSettings();
+      expect(userPromptSubmitHooks(settings)).toHaveLength(1);
+      expect(hasCommand(settings, routerCommand)).toBe(true);
+      expect(hasCommand(settings, siblingCommand)).toBe(true);
+    });
+
+    it('init twice after registering a $HOME-form hook leaves settings.json byte-identical', () => {
+      const command = 'node "$HOME/dist/hooks/user-prompt-submit.js"';
+      writeUserPromptSubmit([{ matcher: '', hooks: [{ type: 'command', command }] }]);
+
+      handleInit([projectDir], [expectedHookPath()]);
+      const first = fs.readFileSync(settingsPath(), 'utf-8');
+      handleInit([projectDir], [expectedHookPath()]);
+      const second = fs.readFileSync(settingsPath(), 'utf-8');
+
+      expect(second).toBe(first);
+    });
+
+    it('init keeps the Node hook verbatim while dropping a coexisting legacy shell hook', () => {
+      const nodeCommand = 'node "$HOME/dist/hooks/user-prompt-submit.js"';
+      const legacyCommand = `bash "${getLegacyHookPath()}"`;
+      writeUserPromptSubmit([
+        { matcher: '', hooks: [{ type: 'command', command: legacyCommand }] },
+        { matcher: '', hooks: [{ type: 'command', command: nodeCommand }] },
+      ]);
+
+      handleInit([projectDir], [expectedHookPath()]);
+
+      const settings = readSettings();
+      expect(hasCommand(settings, legacyCommand)).toBe(false);
+      expect(routerHookCommands(settings)).toEqual([nodeCommand]);
+    });
+
+    it('init collapses a bare Node command and a wrapped Node entry into one registration', () => {
+      const nodeCommand = 'node "$HOME/dist/hooks/user-prompt-submit.js"';
+      writeUserPromptSubmit([
+        { type: 'command', command: nodeCommand },
+        { matcher: '', hooks: [{ type: 'command', command: nodeCommand }] },
+      ]);
+
+      handleInit([projectDir], [expectedHookPath()]);
+
+      const settings = readSettings();
+      expect(routerHookCommands(settings)).toEqual([nodeCommand]);
+      expect(userPromptSubmitHooks(settings)).toHaveLength(1);
+
+      const first = fs.readFileSync(settingsPath(), 'utf-8');
+      handleInit([projectDir], [expectedHookPath()]);
+      expect(fs.readFileSync(settingsPath(), 'utf-8')).toBe(first);
+    });
+
+    it('init drops a legacy shell hook from an entry while keeping its sibling hook and matcher', () => {
+      const legacyCommand = `bash "${getLegacyHookPath()}"`;
+      const customCommand = 'echo user-custom-hook';
+      writeUserPromptSubmit([
+        {
+          matcher: 'custom',
+          hooks: [
+            { type: 'command', command: legacyCommand },
+            { type: 'command', command: customCommand },
+          ],
+        },
+      ]);
+
+      handleInit([projectDir]);
+
+      const settings = readSettings();
+      expect(hasCommand(settings, legacyCommand)).toBe(false);
+      expect(hasCommand(settings, customCommand)).toBe(true);
+      const customEntry = userPromptSubmitHooks(settings).find(
+        (entry: any) => Array.isArray(entry?.hooks) && entry.hooks.some(
+          (hook: any) => hook?.command === customCommand,
+        ),
+      );
+      expect(customEntry.matcher).toBe('custom');
+      expect(customEntry.hooks).toHaveLength(1);
+    });
+
+    it('init removes a legacy shell hook sharing an entry with the Node hook', () => {
+      const nodeCommand = 'node "$HOME/dist/hooks/user-prompt-submit.js"';
+      const legacyCommand = `bash "${getLegacyHookPath()}"`;
+      writeUserPromptSubmit([
+        {
+          matcher: '',
+          hooks: [
+            { type: 'command', command: nodeCommand },
+            { type: 'command', command: legacyCommand },
+          ],
+        },
+      ]);
+
+      handleInit([projectDir], [expectedHookPath()]);
+
+      const settings = readSettings();
+      expect(hasCommand(settings, legacyCommand)).toBe(false);
+      expect(routerHookCommands(settings)).toEqual([nodeCommand]);
+      expect(userPromptSubmitHooks(settings)).toHaveLength(1);
+    });
+
+    it('init migrates a wrapped legacy shell hook to the Node hook', () => {
+      const legacyCommand = `bash "${getLegacyHookPath()}"`;
+      writeUserPromptSubmit([
+        { matcher: '', hooks: [{ type: 'command', command: legacyCommand }] },
+      ]);
+
+      handleInit([projectDir]);
+
+      const settings = readSettings();
+      expect(hasCommand(settings, legacyCommand)).toBe(false);
+      expect(routerHookCommands(settings)).toEqual([getHookCommand()]);
     });
 
     it('init keeps a same-named hook belonging to another package', () => {

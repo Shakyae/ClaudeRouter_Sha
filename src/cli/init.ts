@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { getHookCommand, getHookPath, isRouterHook } from './hook-path';
+import { getHookCommand, getHookPath, getLegacyHookPath, isRouterHook } from './hook-path';
 
 function getSettingsPath(): string {
   return path.join(os.homedir(), '.claude', 'settings.json');
@@ -56,22 +56,84 @@ export function handleInit(args: string[], expectedPaths?: readonly string[]): v
       settings.hooks.UserPromptSubmit = [];
     }
 
-    const hadRouterHook = settings.hooks.UserPromptSubmit.some(
-      (entry: unknown) => isRouterHook(entry, expectedPaths),
+    // Work at hook granularity: an entry only acts as a container so a legacy
+    // shell hook can be removed without taking the user's sibling hooks (or
+    // the entry's matcher) with it. A wrapped Node hook is kept byte-for-byte
+    // intact, which preserves the portable `$HOME` form.
+    const nodeHookPaths = expectedPaths ?? [getHookPath()];
+    const legacyHookPaths = [getLegacyHookPath()];
+    const isWrappedEntry = (entry: unknown): entry is { hooks: unknown[] } =>
+      typeof entry === 'object' &&
+      entry !== null &&
+      Array.isArray((entry as { hooks?: unknown }).hooks);
+    const isNodeHook = (hook: unknown): boolean => isRouterHook(hook, nodeHookPaths);
+    const isLegacyHook = (hook: unknown): boolean => isRouterHook(hook, legacyHookPaths);
+
+    const entries: unknown[] = settings.hooks.UserPromptSubmit;
+    // A bare `{ type: 'command', ... }` object is the historical shape written
+    // by older router versions; a wrapped entry is the current shape.
+    const hasWrappedNodeHook = entries.some(
+      (entry) => isWrappedEntry(entry) && entry.hooks.some(isNodeHook),
     );
-    settings.hooks.UserPromptSubmit = [
-      ...settings.hooks.UserPromptSubmit.filter((entry: unknown) => !isRouterHook(entry, expectedPaths)),
-      {
+    const hasBareNodeHook = entries.some(
+      (entry) => !isWrappedEntry(entry) && isNodeHook(entry),
+    );
+
+    const hadRouterHook = hasWrappedNodeHook || hasBareNodeHook ||
+      entries.some((entry) => isLegacyHook(entry));
+
+    // Only one Node registration may survive, otherwise the hook fires twice.
+    let keptNodeHook = false;
+    const normalized: unknown[] = [];
+    for (const entry of entries) {
+      if (isWrappedEntry(entry)) {
+        const hooks = entry.hooks.filter((hook) => {
+          if (isLegacyHook(hook)) {
+            return false;
+          }
+          if (isNodeHook(hook)) {
+            if (keptNodeHook) {
+              return false;
+            }
+            keptNodeHook = true;
+          }
+          return true;
+        });
+        if (hooks.length === entry.hooks.length) {
+          normalized.push(entry);
+        } else if (hooks.length > 0) {
+          normalized.push({ ...entry, hooks });
+        }
+      } else if (isNodeHook(entry)) {
+        // Duplicate of a wrapped registration, or a bare actions array that
+        // the append below re-wraps in the current shape.
+        continue;
+      } else if (isLegacyHook(entry)) {
+        continue;
+      } else {
+        normalized.push(entry);
+      }
+    }
+
+    if (!hasWrappedNodeHook) {
+      normalized.push({
         matcher: '',
         hooks: [{ type: 'command', command: getHookCommand() }],
-      },
-    ];
+      });
+    }
+
+    settings.hooks.UserPromptSubmit = normalized;
+
+    if (hasWrappedNodeHook) {
+      console.log('Kept existing UserPromptSubmit hook in ~/.claude/settings.json');
+    } else {
+      console.log(
+        hadRouterHook
+          ? 'Updated UserPromptSubmit hook in ~/.claude/settings.json'
+          : 'Registered UserPromptSubmit hook in ~/.claude/settings.json',
+      );
+    }
     writeJsonFile(settingsPath, settings);
-    console.log(
-      hadRouterHook
-        ? 'Updated UserPromptSubmit hook in ~/.claude/settings.json'
-        : 'Registered UserPromptSubmit hook in ~/.claude/settings.json',
-    );
 
     const targetDir = args[0] || process.cwd();
     const targetClaudeMd = path.join(targetDir, 'CLAUDE.md');

@@ -14,8 +14,27 @@ export function getLegacyHookPath(): string {
   return path.resolve(getPackageRoot(), 'hooks', 'user-prompt-submit.sh');
 }
 
+function getHomeRelativeHookPath(): string | null {
+  if (process.platform === 'win32') {
+    return null;
+  }
+  const relative = path.relative(os.homedir(), getHookPath());
+  if (
+    relative === '' ||
+    relative === '..' ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  ) {
+    return null;
+  }
+  return relative.split(path.sep).join('/');
+}
+
 export function getHookCommand(): string {
-  return `node "${getHookPath()}"`;
+  const relative = getHomeRelativeHookPath();
+  return relative
+    ? `node "$HOME/${relative}"`
+    : `node "${getHookPath()}"`;
 }
 
 function getRouterHookPaths(): string[] {

@@ -36,13 +36,15 @@ npm install -g .
 claude-router init
 ```
 
-`init` always registers this absolute command in `~/.claude/settings.json`:
+`init` registers this command in `~/.claude/settings.json`:
 
 ```text
-node <absolute-package-path>/dist/hooks/user-prompt-submit.js
+node "$HOME/<package-path>/dist/hooks/user-prompt-submit.js"
 ```
 
-`init` writes the absolute path, but `claude-router doctor` also recognises the equivalent `$HOME`, `${HOME}`, `~`, `${CLAUDE_PLUGIN_ROOT}`, `%USERPROFILE%`, `$env:USERPROFILE` and `$USERPROFILE` spellings if you edit the entry by hand.
+It prefers the portable `$HOME`-relative form when the package lives under your home directory and falls back to the absolute path otherwise (this includes Windows). If a Node hook registration already exists, `init` leaves it — and any hooks sharing the same entry — exactly as written.
+
+`claude-router doctor` also recognises the equivalent `$HOME`, `${HOME}`, `~`, `${CLAUDE_PLUGIN_ROOT}`, `%USERPROFILE%`, `$env:USERPROFILE` and `$USERPROFILE` spellings if you edit the entry by hand.
 
 The optional path only determines which `CLAUDE.md` receives the managed ClaudeRouter runtime directive. The target directory must already exist; `init` does not create it. Without a path, `claude-router init` targets the current project; to target another project:
 
@@ -354,7 +356,7 @@ Run `npm run build`, then run `claude-router init` again.
 
 **No events appear in stats**
 
-Run `claude-router doctor`. It checks whether the Node hook command is registered in `~/.claude/settings.json`, recognising both the absolute path written by `init` and equivalent `$HOME`, `${HOME}`, `~`, `${CLAUDE_PLUGIN_ROOT}`, `%USERPROFILE%`, `$env:USERPROFILE` and `$USERPROFILE` spellings.
+Run `claude-router doctor`. It checks whether the Node hook command is registered in `~/.claude/settings.json`, recognising both the forms written by `init` (the `$HOME`-relative and absolute paths) and the equivalent `${HOME}`, `~`, `${CLAUDE_PLUGIN_ROOT}`, `%USERPROFILE%`, `$env:USERPROFILE` and `$USERPROFILE` spellings.
 
 **A prompt unexpectedly stays with the main agent**
 

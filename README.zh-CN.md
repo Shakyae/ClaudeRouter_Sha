@@ -36,13 +36,15 @@ npm install -g .
 claude-router init
 ```
 
-`init` 始终将以下绝对命令注册到用户级 `~/.claude/settings.json`：
+`init` 将以下命令注册到用户级 `~/.claude/settings.json`：
 
 ```text
-node <absolute-package-path>/dist/hooks/user-prompt-submit.js
+node "$HOME/<package-path>/dist/hooks/user-prompt-submit.js"
 ```
 
-`init` 写入的是绝对路径，但如果你手动编辑了这条配置，`claude-router doctor` 也能识别等价的 `$HOME`、`${HOME}`、`~`、`${CLAUDE_PLUGIN_ROOT}`、`%USERPROFILE%`、`$env:USERPROFILE` 与 `$USERPROFILE` 写法。
+当包位于用户主目录下时，优先使用可移植的 `$HOME` 相对形式；否则（包括 Windows）回退为绝对路径。若已存在 Node hook 注册，`init` 会原样保留它以及同一 entry 中的其他 hook。
+
+如果你手动编辑了这条配置，`claude-router doctor` 也能识别等价的 `$HOME`、`${HOME}`、`~`、`${CLAUDE_PLUGIN_ROOT}`、`%USERPROFILE%`、`$env:USERPROFILE` 与 `$USERPROFILE` 写法。
 
 可选路径只决定将 ClaudeRouter 托管的运行时 directive 写入哪个 `CLAUDE.md`。目标目录必须已存在；`init` 不会创建目录。不指定路径时，`claude-router init` 以当前项目为目标；指定其他项目：
 
@@ -354,7 +356,7 @@ ClaudeRouter 采用 fail-open 设计，不会有意阻止 Claude Code：
 
 **统计中没有事件**
 
-运行 `claude-router doctor`。它会检查 Node hook 命令是否已注册到 `~/.claude/settings.json`，同时识别 `init` 写入的绝对路径以及等价的 `$HOME`、`${HOME}`、`~`、`${CLAUDE_PLUGIN_ROOT}`、`%USERPROFILE%`、`$env:USERPROFILE` 和 `$USERPROFILE` 写法。
+运行 `claude-router doctor`。它会检查 Node hook 命令是否已注册到 `~/.claude/settings.json`，识别 `init` 写入的 `$HOME` 相对形式与绝对路径，以及等价的 `${HOME}`、`~`、`${CLAUDE_PLUGIN_ROOT}`、`%USERPROFILE%`、`$env:USERPROFILE` 和 `$USERPROFILE` 写法。
 
 **提示意外地留在主 agent 处理**
 

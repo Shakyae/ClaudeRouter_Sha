@@ -17,7 +17,7 @@ vi.mock('os', async (importOriginal) => {
   return { ...actual, homedir: getHomedir };
 });
 
-import { getHookPath, isRouterCommand, isRouterHook } from '../src/cli/hook-path';
+import { getHookCommand, getHookPath, isRouterCommand, isRouterHook } from '../src/cli/hook-path';
 
 let tmpDir: string;
 let homeDir: string;
@@ -143,6 +143,28 @@ describe('isRouterCommand', () => {
     expect(isRouterCommand(undefined)).toBe(false);
     expect(isRouterCommand(42)).toBe(false);
     expect(isRouterCommand(null)).toBe(false);
+  });
+});
+
+describe('getHookCommand', () => {
+  it.skipIf(process.platform === 'win32')('hook inside home → $HOME-relative form', () => {
+    // Pick an ancestor of the hook so the relative path is deterministic.
+    const home = path.resolve(getHookPath(), '..', '..', '..', '..');
+    setHomedir(home);
+    const relative = path.relative(home, getHookPath()).split(path.sep).join('/');
+    expect(getHookCommand()).toBe(`node "$HOME/${relative}"`);
+  });
+
+  it.skipIf(process.platform === 'win32')('hook outside home → absolute path', () => {
+    setHomedir(homeDir);
+    expect(path.relative(homeDir, getHookPath()).startsWith('..')).toBe(true);
+    expect(getHookCommand()).toBe(`node "${getHookPath()}"`);
+  });
+
+  it('round-trips through isRouterCommand', () => {
+    const home = path.resolve(getHookPath(), '..', '..', '..', '..');
+    setHomedir(home);
+    expect(isRouterCommand(getHookCommand())).toBe(true);
   });
 });
 
