@@ -103,7 +103,7 @@ If the directive names fallback models, you may retry the delegation with them. 
 - The failure happened in the delegation call itself and the subagent produced no answer, e.g. `Agent terminated early due to an API error: ...`.
 - The error means that model is unavailable: `usage_limit_reached`, exhausted quota, `all credentials ... cooling down`, `model not found`, or a persistent `429` / `5xx`.
 
-Do not fall back when the subagent answered normally but the task failed, or when the error is a `400` bad-request, a context-length error, or an authentication failure. Another model fails the same way, so those need a different fix.
+Do not fall back when the subagent answered normally but the task failed, or when the error is a `400` bad-request about the request itself, a context-length error, or an authentication failure. Another model fails the same way, so those need a different fix. A `400` that says the model itself is unknown (`unknown provider for model ...`, `model not found`) is a model-unavailable failure and does count as a fallback trigger.
 
 Retry rules:
 
