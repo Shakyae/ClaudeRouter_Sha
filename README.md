@@ -242,6 +242,26 @@ Merge this snippet into `.claude-router.json` to enable conservative routing for
 
 The default is `false`. When enabled, the selected tier is shifted up one step **before** its configured execution is resolved: `SIMPLE → STANDARD → COMPLEX → EXTREME`; `EXTREME` stays `EXTREME`. This also applies to manual overrides: `//simple` uses the execution mode and model alias configured for `STANDARD`, not `SIMPLE`. Set `conservative` back to `false` to disable the shift. Project configuration takes precedence over user configuration.
 
+### Disable the Router for native Agent Teams
+
+Claude Code's experimental [Agent Teams](https://github.com/mttzzz/claude-code-agent-teams) give a Lead session its own teammates. ClaudeRouter's `[ROUTER]` directive asks the main agent to delegate the *whole* task to one subagent, which conflicts with the Lead's scheduling. Set `CLAUDE_ROUTER_TEAM_MODE=1` to disable the Router for that process:
+
+```bash
+# Normal Claude Code session — Router active.
+claude
+
+# Native Agent Teams session — Router bypassed for this process only.
+CLAUDE_ROUTER_TEAM_MODE=1 \
+CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 \
+claude --teammate-mode in-process
+```
+
+When the variable is exactly `1`, the hook returns no context: no classification, no classifier call, no delegation directive, no routing telemetry or debug log, and no configuration read. Any other value (`0`, `true`, unset) leaves the Router unchanged.
+
+- Only processes that inherit the variable are affected. Exporting it in a global shell profile would disable the Router in every session; put it on the launch command instead.
+- The Router does not pick models for teammates. Model choice inside a team follows Claude Code's own team configuration.
+- The `route()` CLI and SDK are unaffected; only the `UserPromptSubmit` hook checks the variable.
+
 ### Frequently used CLI commands
 
 ```bash
