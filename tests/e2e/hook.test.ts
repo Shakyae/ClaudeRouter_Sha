@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync } from 'fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
 import type { RouterConfig } from '../../src/router/config';
@@ -80,6 +80,7 @@ describe('Node UserPromptSubmit hook', () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     rmSync(homeDir, { recursive: true, force: true });
   });
 
@@ -167,6 +168,66 @@ describe('Node UserPromptSubmit hook', () => {
 
     mockRoute.mockRejectedValueOnce(new Error('classifier unavailable'));
     await expect(processHookInput({ prompt: 'task' })).resolves.toBe('');
+  });
+});
+
+describe('CLAUDE_ROUTER_TEAM_MODE', () => {
+  beforeEach(() => {
+    homeDir = mkdtempSync(path.join(tmpdir(), 'claude-router-hook-'));
+    mockHomedir.mockReturnValue(homeDir);
+    mockLoadConfig.mockReset();
+    mockRoute.mockReset();
+    mockLogDecision.mockReset();
+    mockRecordRoutingEvent.mockReset();
+    mockLoadConfig.mockReturnValue(config);
+    mockRoute.mockResolvedValue(decision({
+      tier: 'COMPLEX',
+      execution: { mode: 'delegate', model: 'opus' },
+      fallbacks: ['sonnet', 'haiku'],
+      directive: '[ROUTER] Complexity: COMPLEX. Delegate the entire task to a subagent using model "opus".',
+    }));
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(homeDir, { recursive: true, force: true });
+  });
+
+  it('bypasses classification, delegation, and telemetry when set to 1', async () => {
+    vi.stubEnv('CLAUDE_ROUTER_TEAM_MODE', '1');
+
+    const result = await handleHookInput({
+      prompt: 'Create an agent team with two reviewers',
+    });
+
+    expect(result).toEqual({ additionalContext: '' });
+    expect(serializeHookOutput(result)).toBe('');
+    expect(mockLoadConfig).not.toHaveBeenCalled();
+    expect(mockRoute).not.toHaveBeenCalled();
+    expect(mockLogDecision).not.toHaveBeenCalled();
+    expect(mockRecordRoutingEvent).not.toHaveBeenCalled();
+    expect(existsSync(path.join(homeDir, '.claude-router'))).toBe(false);
+  });
+
+  it('bypasses routing even for prompts the Router would otherwise override', async () => {
+    vi.stubEnv('CLAUDE_ROUTER_TEAM_MODE', '1');
+
+    await expect(processHookInput({ prompt: '//complex migrate the whole repo' })).resolves.toBe('');
+    expect(mockRoute).not.toHaveBeenCalled();
+  });
+
+  it('keeps routing enabled when the variable is unset, 0, or true', async () => {
+    const expected = '[ROUTER] Complexity: COMPLEX. Delegate the entire task to a subagent using model "opus".';
+
+    await expect(processHookInput({ prompt: 'find the function' })).resolves.toBe(expected);
+
+    for (const value of ['0', 'true', '']) {
+      vi.stubEnv('CLAUDE_ROUTER_TEAM_MODE', value);
+      await expect(processHookInput({ prompt: 'find the function' })).resolves.toBe(expected);
+    }
+
+    expect(mockRoute).toHaveBeenCalledTimes(4);
+    expect(mockRecordRoutingEvent).toHaveBeenCalledTimes(4);
   });
 });
 

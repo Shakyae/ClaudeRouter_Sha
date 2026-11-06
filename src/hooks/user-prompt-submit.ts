@@ -179,6 +179,12 @@ function buildOutput(decision: RoutingDecision): HookOutput {
 }
 
 export async function handleHookInput(value: unknown): Promise<HookOutput> {
+  // Native Agent Teams sessions opt out of ClaudeRouter entirely: no
+  // classification, delegation, routing telemetry, or debug log. Strictly "1".
+  if (process.env.CLAUDE_ROUTER_TEAM_MODE === '1') {
+    return { additionalContext: '' };
+  }
+
   const input = parseHookInput(value);
   if (!input || input.is_subagent || input.agent_id !== undefined) {
     return { additionalContext: '' };

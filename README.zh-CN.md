@@ -242,6 +242,26 @@ ClaudeRouter 按以下优先级合并配置：
 
 默认值为 `false`。开启后，在解析对应执行配置**之前**，将选定档位提升一级：`SIMPLE → STANDARD → COMPLEX → EXTREME`；`EXTREME` 保持不变。手动前缀覆盖同样受此设置影响：`//simple` 会使用 `STANDARD` 档位配置的执行方式和模型别名，而不是 `SIMPLE`。将 `conservative` 改回 `false` 可关闭提升。项目级配置优先于用户级配置。
 
+### 为原生 Agent Teams 关闭 Router
+
+Claude Code 的实验性 [Agent Teams](https://github.com/mttzzz/claude-code-agent-teams) 由 Lead 会话调度自己的成员。ClaudeRouter 的 `[ROUTER]` 指令要求主 agent 把**整个任务**交给单个 subagent，这会与 Lead 的调度冲突。设置 `CLAUDE_ROUTER_TEAM_MODE=1` 可对当前进程关闭 Router：
+
+```bash
+# 普通 Claude Code 会话，Router 正常工作。
+claude
+
+# 原生 Agent Teams 会话，仅当前进程绕过 Router。
+CLAUDE_ROUTER_TEAM_MODE=1 \
+CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 \
+claude --teammate-mode in-process
+```
+
+变量严格等于 `1` 时，Hook 不返回任何上下文：不分类、不调用分类器、不产生委派指令、不写路由遥测和调试日志，也不读取配置。其他取值（`0`、`true`、未设置）保持原有行为。
+
+- 仅对继承该变量的进程生效。把它写进全局 Shell 配置会让所有会话都失去 Router，请放在启动命令上。
+- Router 不会为 Teammate 选择模型，团队内的模型选择由 Claude Code 的团队配置负责。
+- `route()` 的 CLI 与 SDK 行为不变，只有 `UserPromptSubmit` Hook 读取该变量。
+
 ### 常用 CLI 命令
 
 ```bash
